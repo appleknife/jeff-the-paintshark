@@ -62,12 +62,17 @@ async function boot() {
   setupStudio();
   setupInput();
   setupKeys();
-  state.toggleFullscreen = () => {
-    state.fullscreen = !state.fullscreen;
-    $('#toolRail').classList.toggle('hidden', state.fullscreen);
-    document.querySelector('.bottombar').classList.toggle('hidden', state.fullscreen);
+  // Full screen hides every toolbar; a small button (or four-finger tap, or F) brings them back.
+  state.toggleFullscreen = (force) => {
+    const on = typeof force === 'boolean' ? force : !state.fullscreen;
+    if (on === state.fullscreen) return;
+    state.fullscreen = on;
+    $('#studio').classList.toggle('fullscreen', on);
+    $('#exitFullscreen').classList.toggle('hidden', !on);
+    if (on) { closePanels(); toast('Full screen — tap the button or four-finger tap to exit', 2400); }
     setTimeout(() => state.view?.resize(), 40);
   };
+  $('#exitFullscreen').onclick = () => state.toggleFullscreen(false);
   if ('serviceWorker' in navigator) {
     // A new version took over. Reload to use it, but never yank the page out from under an
     // open canvas (that lost the last strokes): wait until the user is back in the gallery.
@@ -353,6 +358,7 @@ async function closeCurrentDoc() {
   clearTimeout(state.autosaveTimer);
   await saveDoc(false, doc).catch(() => {});
   state.timelapse?.stop();
+  state.toggleFullscreen?.(false);
   if (!$('#refPane').classList.contains('hidden')) state.toggleReference?.();
   state.doc = null;
   if (state.view) { state.view.doc = null; state.view.activeStroke = null; }

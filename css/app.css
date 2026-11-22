@@ -467,3 +467,15 @@ input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
   .setting input[type=range] { width: 130px; }
   .setting select { min-width: 130px; }
 }
+
+/* full screen: hide all chrome, leave one small way out */
+.studio.fullscreen .topbar, .studio.fullscreen .rail, .studio.fullscreen .bottombar, .studio.fullscreen .side { display: none !important; }
+.exit-fs {
+  position: absolute; z-index: 20; top: calc(12px + var(--safe-t)); left: calc(12px + var(--safe-l));
+  display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px 0 10px;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--text); font-weight: 750; font-size: 13px;
+  background: var(--glass); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); box-shadow: var(--shadow);
+  opacity: .55; transition: opacity .15s;
+}
+.exit-fs:hover, .exit-fs:focus-visible, .exit-fs:active { opacity: 1; }
+.exit-fs svg { width: 18px; height: 18px; }
