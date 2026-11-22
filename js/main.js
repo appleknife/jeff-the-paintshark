@@ -1,4 +1,4 @@
-import { $, el, makeCanvas, ctx2d, loadImage, uid, canvasToBlob, isIPad, fitArea, releaseCanvas } from './util.js';
+import { $, el, makeCanvas, ctx2d, loadImage, uid, canvasToBlob, isIPad, fitArea, releaseCanvas, installRangeFill } from './util.js';
 import { Doc, compositeThumb } from './doc.js';
 import { defaultPreset } from './brush.js';
 import { Selection } from './selection.js';
@@ -28,6 +28,7 @@ function seedPresets() {
 
 async function boot() {
   window.__state = state;
+  installRangeFill();
   state.prefs = store.loadPrefs();
   state.palettes = store.loadPalettes();
   state.primary = state.prefs.primary || state.primary;
@@ -107,24 +108,26 @@ async function renderGallery() {
   galleryUrls = [];
   $('#galleryEmpty').classList.toggle('hidden', docs.length > 0);
   for (const d of docs) {
-    const card = el('button', { class: 'card' });
+    const card = el('div', { class: 'card', role: 'button', tabindex: 0 });
     const src = d.thumb ? URL.createObjectURL(d.thumb) : '';
     if (src) galleryUrls.push(src);
     const img = el('img', { alt: '', src });
-    card.append(img, el('div', { class: 'meta' },
+    const when = new Date(d.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    card.append(el('div', { class: 'art' }, img), el('div', { class: 'meta' },
       el('b', {}, d.name || 'Untitled'),
-      el('span', {}, `${d.width}×${d.height} · ${new Date(d.updatedAt).toLocaleDateString()}`)));
-    const del = el('button', { class: 'del', title: 'Delete' }, '✕');
+      el('span', {}, `${when}, ${d.width} × ${d.height}`)));
+    card.onkeydown = (e) => { if (e.key === 'Enter') card.click(); };
+    const del = el('button', { class: 'del', title: 'Delete', 'aria-label': `Delete ${d.name || 'artwork'}` }, '✕');
     del.onclick = async (e) => {
       e.stopPropagation();
       if (confirm(`Delete “${d.name}”?`)) { await store.deleteDoc(d.id); renderGallery(); }
     };
-    card.append(del);
+    card.querySelector('.art').append(del);
     card.onclick = () => openDocument(d.id);
     grid.append(card);
   }
-  const add = el('button', { class: 'card add' },
-    el('div', {}, el('div', { style: 'font-size:32px' }, '+'), el('div', {}, 'New Canvas')));
+  const add = el('button', { class: 'card add' });
+  add.innerHTML = '<div class="art"><div style="display:grid;justify-items:center"><svg><use href="#i-add"/></svg>New canvas</div></div>';
   add.onclick = newCanvasSheet;
   grid.append(add);
 }

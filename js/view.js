@@ -31,6 +31,7 @@ export class Viewport {
   resize() {
     const r = this.stage.getBoundingClientRect();
     const wasHidden = !(this.w > 1 && this.h > 1);
+    const ow = this.w, oh = this.h;
     this.w = Math.max(1, r.width);
     this.h = Math.max(1, r.height);
     for (const c of [this.canvas, this.overlay]) {
@@ -42,6 +43,12 @@ export class Viewport {
     this._checker = null;
     // Coming back from the gallery the studio was hidden (0×0); fit once it has a real size.
     if (wasHidden && this.doc && this.w > 1 && this.h > 1) this.fit();
+    else if (this.doc && !wasHidden) {
+      // Rotating the iPad: refit. Smaller changes (keyboard, panels): keep the canvas centred.
+      const rotated = (ow > oh) !== (this.w > this.h);
+      if (rotated) this.fit();
+      else { this.panX += (this.w - ow) / 2; this.panY += (this.h - oh) / 2; }
+    }
     this.request();
   }
 
@@ -49,9 +56,9 @@ export class Viewport {
     if (this._checker) return this._checker;
     const c = makeCanvas(16, 16);
     const g = ctx2d(c);
-    g.fillStyle = '#3a3d46';
+    g.fillStyle = '#c9ced8';
     g.fillRect(0, 0, 16, 16);
-    g.fillStyle = '#2c2f36';
+    g.fillStyle = '#eef0f4';
     g.fillRect(0, 0, 8, 8);
     g.fillRect(8, 8, 8, 8);
     this._checker = this.ctx.createPattern(c, 'repeat');
@@ -69,10 +76,13 @@ export class Viewport {
 
   fit() {
     if (!this.doc) return;
-    const pad = 40;
-    this.zoom = clamp(Math.min((this.w - pad) / this.doc.width, (this.h - pad) / this.doc.height), 0.02, 1);
+    // Leave room for the floating toolbars (top pills, left rail, bottom dock).
+    const narrow = this.w <= 900;
+    const padX = this.w > 700 ? 84 : 16, padTop = 70, padBottom = narrow ? 150 : 96;
+    const availW = Math.max(40, this.w - padX * 2), availH = Math.max(40, this.h - padTop - padBottom);
+    this.zoom = clamp(Math.min(availW / this.doc.width, availH / this.doc.height), 0.02, 1);
     this.panX = (this.w - this.doc.width * this.zoom) / 2;
-    this.panY = (this.h - this.doc.height * this.zoom) / 2;
+    this.panY = padTop + (availH - this.doc.height * this.zoom) / 2;
     this.request();
   }
 
@@ -100,11 +110,19 @@ export class Viewport {
   draw() {
     const g = this.ctx;
     g.clearRect(0, 0, this.w, this.h);
-    g.fillStyle = '#0a0b0d';
+    g.fillStyle = '#0d1320';
     g.fillRect(0, 0, this.w, this.h);
     if (!this.doc) return;
     const d = this.doc;
     const w = d.width * this.zoom, h = d.height * this.zoom;
+    // Soft drop shadow so the canvas sits on the table like a sheet of paper.
+    g.save();
+    g.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    g.shadowBlur = 36;
+    g.shadowOffsetY = 12;
+    g.fillStyle = '#0d1320';
+    g.fillRect(this.panX, this.panY, w, h);
+    g.restore();
 
     g.save();
     g.translate(this.panX, this.panY);
@@ -135,9 +153,6 @@ export class Viewport {
 
     d.zoom = this.zoom;
 
-    g.strokeStyle = 'rgba(255,255,255,.18)';
-    g.lineWidth = 1;
-    g.strokeRect(this.panX - 0.5, this.panY - 0.5, w + 1, h + 1);
 
     // Overlay: clear once, then guides, selection-in-progress and brush cursor.
     // (The cursor used to clear the overlay right after the guides were drawn, so guides never showed.)

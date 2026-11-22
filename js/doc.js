@@ -24,8 +24,6 @@ export class Layer {
   thumb(size = 64) {
     const c = makeCanvas(size, size * (this.doc.height / this.doc.width));
     const g = ctx2d(c);
-    g.fillStyle = '#2a2a2e';
-    g.fillRect(0, 0, c.width, c.height);
     if (this.canvas && !this.children) g.drawImage(this.canvas, 0, 0, c.width, c.height);
     return c;
   }

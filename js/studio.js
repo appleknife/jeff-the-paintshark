@@ -249,20 +249,21 @@ export function renderLayers() {
     $('#layerOpacityVal').textContent = `${Math.round(active.opacity * 100)}%`;
   }
   for (const layer of doc.layerFlatList()) {
-    const item = el('div', { class: 'layer-item' + (layer.id === doc.activeId ? ' on' : '') });
+    const item = el('div', { class: 'layer-item' + (layer.id === doc.activeId ? ' on' : '') + (layer.visible ? '' : ' hidden-layer') });
     const thumb = el('img', { alt: '' });
-    const tc = layer.thumb(40);
+    const tc = layer.thumb(88);
     thumb.src = tc.toDataURL();
     releaseCanvas(tc);
     let depth = 0, p = layer.group;
     while (p) { depth++; p = p.group; }
     const name = el('span', { class: 'lname' }, `${layer.children ? '▸ ' : ''}${layer.name}`);
-    if (depth) name.style.paddingLeft = `${depth * 10}px`;
-    const vis = el('button', { class: 'mini' + (layer.visible ? ' on' : ''), title: 'Visible' }, '◉');
+    if (depth) name.style.paddingLeft = `${6 + depth * 12}px`;
+    const icon = (id) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const u = document.createElementNS('http://www.w3.org/2000/svg', 'use'); u.setAttribute('href', `#${id}`); s.append(u); return s; };
+    const vis = el('button', { class: 'mini' + (layer.visible ? ' on' : ''), title: layer.visible ? 'Hide layer' : 'Show layer', 'aria-label': 'Toggle visibility' }, icon(layer.visible ? 'i-eye' : 'i-eye-off'));
     vis.onclick = (e) => { e.stopPropagation(); layer.visible = !layer.visible; renderLayers(); state.view.request(); state.maybeAutosave?.(); };
-    const lock = el('button', { class: 'mini' + (layer.alphaLock ? ' on' : ''), title: 'Alpha lock' }, '⌾');
+    const lock = el('button', { class: 'mini flag' + (layer.alphaLock ? ' on' : ''), title: 'Alpha lock', 'aria-label': 'Alpha lock' }, icon('i-lock'));
     lock.onclick = (e) => { e.stopPropagation(); layer.alphaLock = !layer.alphaLock; renderLayers(); state.maybeAutosave?.(); };
-    const mask = el('button', { class: 'mini' + (layer.mask ? ' on' : ''), title: 'Mask' }, '◐');
+    const mask = el('button', { class: 'mini flag' + (layer.mask ? ' on' : ''), title: 'Layer mask', 'aria-label': 'Layer mask' }, icon('i-mask'));
     mask.onclick = (e) => { e.stopPropagation(); doc.activeId = layer.id; toggleMask(); };
     item.append(thumb, name, vis, lock, mask);
     item.onclick = () => { doc.activeId = layer.id; renderLayers(); };
