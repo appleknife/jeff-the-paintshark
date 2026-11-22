@@ -9,51 +9,66 @@ let hsv = [22, 0.72, 1];
 export function setupColor() {
   const wheel = $('#wheel');
   const sv = $('#svBox');
+  // Hue ring with the current colour shown in the middle.
   const drawWheel = () => {
-    const s = wheel.clientWidth || 240;
-    wheel.width = s; wheel.height = s;
+    const css = wheel.clientWidth || 196;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    wheel.width = css * dpr; wheel.height = css * dpr;
     const g = ctx2d(wheel);
-    const r = s / 2;
-    g.clearRect(0, 0, s, s);
-    // Hue 0 sits at 12 o'clock, matching the picker math below (angle + 90°).
-    for (let a = 0; a < 360; a += 2) {
-      const start = ((a - 90) * Math.PI) / 180;
-      g.beginPath();
-      g.moveTo(r, r);
-      g.arc(r, r, r - 2, start, start + (2.6 * Math.PI) / 180);
-      g.closePath();
-      g.fillStyle = `hsl(${a} 100% 50%)`;
-      g.fill();
-    }
-    g.globalCompositeOperation = 'destination-in';
-    g.beginPath(); g.arc(r, r, r - 2, 0, Math.PI * 2); g.fill();
-    g.globalCompositeOperation = 'source-over';
-    const a = (hsv[0] * Math.PI) / 180 - Math.PI / 2;
-    g.strokeStyle = 'rgba(0,0,0,.35)';
-    g.beginPath(); g.arc(r, r, r - 12, 0, Math.PI * 2); g.stroke();
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const r = css / 2, ring = 22, mid = r - ring / 2 - 2;
+    g.clearRect(0, 0, css, css);
+    g.save();
     g.beginPath();
-    g.arc(r + Math.cos(a) * (r - 12), r + Math.sin(a) * (r - 12), 6, 0, Math.PI * 2);
+    g.arc(r, r, r - 2, 0, Math.PI * 2);
+    g.arc(r, r, r - 2 - ring, 0, Math.PI * 2, true);
+    g.clip('evenodd');
+    if (g.createConicGradient) {
+      // Hue 0 at 12 o'clock, increasing clockwise (matches the picker maths).
+      const cg = g.createConicGradient(-Math.PI / 2, r, r);
+      for (let h = 0; h <= 360; h += 30) cg.addColorStop(h / 360, `hsl(${h} 100% 50%)`);
+      g.fillStyle = cg;
+      g.fillRect(0, 0, css, css);
+    } else {
+      for (let a = 0; a < 360; a += 2) {
+        const start = ((a - 90) * Math.PI) / 180;
+        g.beginPath(); g.moveTo(r, r); g.arc(r, r, r, start, start + (2.6 * Math.PI) / 180); g.closePath();
+        g.fillStyle = `hsl(${a} 100% 50%)`; g.fill();
+      }
+    }
+    g.restore();
+    const a = (hsv[0] * Math.PI) / 180 - Math.PI / 2;
+    const kx = r + Math.cos(a) * mid, ky = r + Math.sin(a) * mid;
+    g.beginPath();
+    g.arc(kx, ky, ring / 2 + 2, 0, Math.PI * 2);
     g.fillStyle = `hsl(${hsv[0]} 100% 50%)`;
-    g.strokeStyle = '#fff';
-    g.lineWidth = 2;
-    g.fill(); g.stroke();
+    g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#fff'; g.stroke();
+    g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,.35)';
+    g.beginPath(); g.arc(kx, ky, ring / 2 + 3.5, 0, Math.PI * 2); g.stroke();
   };
   const drawSv = () => {
-    const w = sv.clientWidth || 240;
-    sv.width = w; sv.height = 62;
+    const w = sv.clientWidth || 284, h = sv.clientHeight || 72;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    sv.width = w * dpr; sv.height = h * dpr;
     const g = ctx2d(sv);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const grad = g.createLinearGradient(0, 0, w, 0);
     grad.addColorStop(0, '#fff');
     grad.addColorStop(1, `hsl(${hsv[0]} 100% 50%)`);
     g.fillStyle = grad;
-    g.fillRect(0, 0, w, 62);
-    const vg = g.createLinearGradient(0, 0, 0, 62);
+    g.fillRect(0, 0, w, h);
+    const vg = g.createLinearGradient(0, 0, 0, h);
     vg.addColorStop(0, 'rgba(0,0,0,0)');
     vg.addColorStop(1, 'rgba(0,0,0,1)');
     g.fillStyle = vg;
-    g.fillRect(0, 0, w, 62);
-    g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5;
-    g.beginPath(); g.arc(hsv[1] * w, (1 - hsv[2]) * 62, 5, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillRect(0, 0, w, h);
+    const x = hsv[1] * w, y = (1 - hsv[2]) * h;
+    g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2);
+    g.fillStyle = state.primary; g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#fff'; g.stroke();
+    g.lineWidth = 1; g.strokeStyle = 'rgba(0,0,0,.35)';
+    g.beginPath(); g.arc(x, y, 10.5, 0, Math.PI * 2); g.stroke();
   };
   const pick = (e, canvas, fn) => {
     const r = canvas.getBoundingClientRect();
@@ -102,9 +117,13 @@ function applyHsv() {
 export function syncColorUI(full = true) {
   const [r, g, b] = hexToRgb(state.primary);
   const [h, s, v] = rgbToHsv(r, g, b);
-  hsv = [h, s, v];
+  // While dragging the picker keep its own hue/sat (a grey would otherwise snap the hue to red).
+  if (full) hsv = [h, s, v];
+  if (!full) {
+    $('#hue').value = Math.round(hsv[0]); $('#sat').value = hsv[1] * 100; $('#val').value = hsv[2] * 100;
+  }
   if (full) {
-    $('#hue').value = h;
+    $('#hue').value = Math.round(h);
     $('#sat').value = s * 100;
     $('#val').value = v * 100;
     $('#alpha').value = state.alpha * 100;
@@ -112,6 +131,14 @@ export function syncColorUI(full = true) {
     state._drawSv?.();
   }
   $('#primaryWell').style.background = state.primary;
+  const sw = $('#wheelSwatch');
+  if (sw) sw.style.background = state.primary;
+  // Slider tracks show the colour each slider produces.
+  const root = $('#colorPanel');
+  root.style.setProperty('--sat-a', rgbToHex(...hsvToRgb(hsv[0], 0, hsv[2])));
+  root.style.setProperty('--sat-b', rgbToHex(...hsvToRgb(hsv[0], 1, hsv[2])));
+  root.style.setProperty('--val-b', rgbToHex(...hsvToRgb(hsv[0], hsv[1], 1)));
+  root.style.setProperty('--alpha-b', state.primary);
   $('#secondaryWell').style.background = state.secondary;
   $('#primaryWell').style.opacity = state.alpha;
   renderSwatches();
@@ -122,12 +149,12 @@ function renderSwatches() {
   wrap.innerHTML = '';
   const palette = state.palettes[state.paletteIndex] || state.palettes[0];
   if (!palette) return;
-  wrap.append(el('div', { style: 'width:100%;display:flex;gap:6px;align-items:center;margin-bottom:4px' },
-    el('b', { style: 'font-size:11px' }, palette.name),
+  wrap.append(el('div', { class: 'swatch-head' },
+    el('b', {}, palette.name),
     el('span', { class: 'spacer' }),
     el('button', { class: 'btn small ghost', onclick: () => { state.paletteIndex = (state.paletteIndex + 1) % state.palettes.length; renderSwatches(); } }, 'Next')));
   for (const c of palette.colors) {
-    const s = el('button', { class: 'swatch', style: { background: c } });
+    const s = el('button', { class: 'swatch' + (c.toLowerCase() === state.primary.toLowerCase() ? ' on' : ''), style: { background: c }, 'aria-label': c });
     s.onclick = () => { state.primary = c; syncColorUI(); saveColors(); };
     wrap.append(s);
   }
@@ -154,6 +181,8 @@ export function selectBrush(p) {
   // Deep copy so Brush Studio tweaks don't silently edit the saved preset's nested settings.
   state.brush = JSON.parse(JSON.stringify(p));
   syncBrushSliders();
+  const bn = $('#brushName');
+  if (bn) bn.textContent = state.brush.name || 'Brushes';
   state.brush.mode = state.tool === 'erase' ? 'erase' : state.tool === 'smudge' ? 'smudge' : 'paint';
   clearTipCache();
 }

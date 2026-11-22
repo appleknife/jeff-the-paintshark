@@ -12,6 +12,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/favicon-32.png" type="image/png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preload" href="fonts/nunito-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -48,6 +49,9 @@
   <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/></symbol>
   <symbol id="i-reference" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M3 14l5-4 4 3 3-2 6 4"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.1 6.6C3.6 8.3 2 12 2 12s4 7 10 7a9.6 9.6 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4 3 8l4 4M3 8h13M17 12l4 4-4 4M21 16H8"/></symbol>
+  <symbol id="i-grid4" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></symbol>
 </svg>
 
 <main id="gallery" class="gallery">
@@ -62,25 +66,30 @@
     <div class="row">
       <button class="btn" id="importArt"><svg><use href="#i-share"/></svg>Import</button>
       <button class="btn primary" id="newArt"><svg><use href="#i-add"/></svg>New Canvas</button>
-      <button class="btn ghost" id="openSettings"><svg><use href="#i-settings"/></svg></button>
+      <button class="icon-btn" id="openSettings" title="Settings" aria-label="Settings"><svg><use href="#i-settings"/></svg></button>
     </div>
   </header>
   <section id="galleryGrid" class="gallery-grid"></section>
-  <p id="galleryEmpty" class="empty">No canvases yet. Tap <b>New Canvas</b> to start swimming.</p>
+  <p id="galleryEmpty" class="empty">Your gallery is empty. Tap <b>New Canvas</b> to start a painting.</p>
 </main>
 
 <main id="studio" class="studio hidden">
   <header class="topbar">
-    <button class="icon-btn" id="backBtn" title="Gallery"><svg><use href="#i-back"/></svg></button>
-    <button class="icon-btn" id="undoBtn" title="Undo"><svg><use href="#i-undo"/></svg></button>
-    <button class="icon-btn" id="redoBtn" title="Redo"><svg><use href="#i-redo"/></svg></button>
-    <input id="docName" class="doc-name" value="Untitled" aria-label="Artwork name">
+    <div class="pill">
+      <button class="icon-btn" id="backBtn" title="Gallery" aria-label="Back to gallery"><svg><use href="#i-back"/></svg></button>
+      <input id="docName" class="doc-name" value="Untitled" aria-label="Artwork name">
+      <span class="pill-sep"></span>
+      <button class="icon-btn" id="undoBtn" title="Undo" aria-label="Undo"><svg><use href="#i-undo"/></svg></button>
+      <button class="icon-btn" id="redoBtn" title="Redo" aria-label="Redo"><svg><use href="#i-redo"/></svg></button>
+    </div>
     <span class="spacer"></span>
+    <div class="pill">
     <button class="icon-btn" id="guideBtn" title="Drawing guide"><svg><use href="#i-guide"/></svg></button>
     <button class="icon-btn" id="timeBtn" title="Timelapse"><svg><use href="#i-timer"/></svg></button>
     <button class="icon-btn" id="refBtn" title="Reference"><svg><use href="#i-reference"/></svg></button>
     <button class="icon-btn" id="shareBtn" title="Export"><svg><use href="#i-share"/></svg></button>
     <button class="icon-btn" id="layersBtn" title="Layers"><svg><use href="#i-layers"/></svg></button>
+    </div>
   </header>
 
   <div class="body">
@@ -145,7 +154,7 @@
       <div class="panel" id="colorPanel">
         <header class="panel-head"><b>Color</b><span class="spacer"></span>
           <button class="icon-btn" id="colorClose"><svg><use href="#i-close"/></svg></button></header>
-        <canvas id="wheel" class="wheel"></canvas>
+        <div class="wheel-wrap"><canvas id="wheel" class="wheel"></canvas><span id="wheelSwatch" class="wheel-swatch"></span></div>
         <div class="sv"><canvas id="svBox"></canvas></div>
         <div class="sliders">
           <label>Hue<input id="hue" type="range" min="0" max="360" value="20"></label>
@@ -155,8 +164,8 @@
         </div>
         <div class="swatches" id="swatches"></div>
         <div class="row small">
-          <button class="btn ghost" id="addSwatch">Save swatch</button>
-          <button class="btn ghost" id="newPalette">New palette</button>
+          <button class="btn small" id="addSwatch">Save swatch</button>
+          <button class="btn small ghost" id="newPalette">New palette</button>
         </div>
       </div>
 
@@ -174,18 +183,18 @@
 
   <footer class="bottombar">
     <div class="color-wells">
-      <button class="well" id="primaryWell" title="Primary"></button>
-      <button class="well" id="secondaryWell" title="Secondary"></button>
-      <button class="icon-btn" id="swapColor" title="Swap">⇄</button>
+      <button class="well" id="primaryWell" title="Colour" aria-label="Colour"></button>
+      <button class="well" id="secondaryWell" title="Secondary colour" aria-label="Secondary colour"></button>
+      <button class="icon-btn small" id="swapColor" title="Swap colours" aria-label="Swap colours"><svg><use href="#i-swap"/></svg></button>
     </div>
     <div class="brush-sliders">
-      <label class="slider-row"><span>Size</span><input id="sizeSlider" type="range" min="1" max="500" value="40"><output id="sizeVal">40</output></label>
-      <label class="slider-row"><span>Opacity</span><input id="opacitySlider" type="range" min="1" max="100" value="100"><output id="opacityVal">100%</output></label>
-      <label class="slider-row"><span>Soft</span><input id="softSlider" type="range" min="1" max="100" value="60"><output id="softVal">60%</output></label>
+      <label class="dock-slider"><span>Size <output id="sizeVal">40</output></span><input id="sizeSlider" type="range" min="1" max="500" value="40"></label>
+      <label class="dock-slider"><span>Opacity <output id="opacityVal">100%</output></span><input id="opacitySlider" type="range" min="1" max="100" value="100"></label>
+      <label class="dock-slider"><span>Softness <output id="softVal">60%</output></span><input id="softSlider" type="range" min="1" max="100" value="60"></label>
     </div>
     <div class="row">
-      <button class="btn ghost" id="quickMenuBtn">QuickMenu</button>
-      <button class="btn ghost" id="presetsBtn">Brushes</button>
+      <button class="icon-btn" id="quickMenuBtn" title="QuickMenu" aria-label="QuickMenu"><svg><use href="#i-grid4"/></svg></button>
+      <button class="btn" id="presetsBtn"><svg><use href="#i-brush"/></svg><span id="brushName">Brushes</span></button>
     </div>
   </footer>
 </main>

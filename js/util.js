@@ -210,3 +210,26 @@ export function canvasToBlob(canvas, type = 'image/png', quality) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Paint the filled part of a range slider (CSS reads --p). */
+export function syncRange(el) {
+  if (!el || el.type !== 'range') return;
+  const min = +el.min || 0, max = el.max === '' ? 100 : +el.max, v = +el.value;
+  el.style.setProperty('--p', `${max > min ? ((v - min) / (max - min)) * 100 : 0}%`);
+}
+
+/** Keep every slider's fill in step with user input, code that sets .value, and new sliders. */
+export function installRangeFill() {
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  Object.defineProperty(HTMLInputElement.prototype, 'value', {
+    configurable: true,
+    get() { return desc.get.call(this); },
+    set(v) { desc.set.call(this, v); if (this.type === 'range') syncRange(this); },
+  });
+  document.addEventListener('input', (e) => syncRange(e.target), true);
+  const scan = (root) => root.querySelectorAll?.('input[type=range]').forEach(syncRange);
+  new MutationObserver((muts) => {
+    for (const m of muts) for (const n of m.addedNodes) { if (n.nodeType === 1) { syncRange(n); scan(n); } }
+  }).observe(document.body, { childList: true, subtree: true });
+  scan(document);
+}
+

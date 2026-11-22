@@ -1,7 +1,7 @@
 import {
   $, $$, el, clamp, uid, makeCanvas, ctx2d, download, canvasToBlob, hsvToRgb, releaseCanvas,
 } from './util.js';
-import { BLEND_MODES } from './brush.js';
+import { BLEND_MODES, tintedTip, tipCanvas } from './brush.js';
 import { ADJUSTMENTS, applyAdjustment, defaultParams } from './adjust.js';
 import { LIQUIFY_MODES } from './transform.js';
 import { state, toast, sheet, field, gestures, closeSheet } from './appstate.js';
@@ -288,18 +288,9 @@ export function brushesSheet() {
     const grid = el('div', { class: 'preset-grid' });
     for (const p of state.presets) {
       const card = el('button', { class: 'preset-card' + (p.id === state.brush.id ? ' on' : '') });
-      const c = makeCanvas(140, 34);
-      const g = ctx2d(c);
-      g.fillStyle = '#101216';
-      g.fillRect(0, 0, 140, 34);
-      g.strokeStyle = state.primary;
-      g.lineWidth = clamp(p.size * 140, 1, 8);
-      g.globalAlpha = p.opacity;
-      g.beginPath();
-      g.moveTo(12, 22);
-      g.bezierCurveTo(44, 4, 76, 32, 128, 12);
-      g.stroke();
-      card.append(c, el('b', {}, p.name), el('span', {}, `${Math.round(p.size * 1000)} · ${p.spacing.toFixed(2)}`));
+      const c = brushPreview(p);
+      const kind = p.mode === 'erase' ? 'Eraser' : p.mode === 'smudge' ? 'Smudge' : `Size ${Math.round(p.size * 1000)}`;
+      card.append(c, el('b', {}, p.name), el('span', {}, kind));
       card.onclick = () => {
         state.selectBrush?.(p);
         // Picking a smudge/eraser preset switches to that tool.
@@ -442,3 +433,51 @@ export function blendOptions() {
   return BLEND_MODES;
 }
 
+
+/** A small sample stroke painted with the preset's real tip, size, opacity and taper. */
+export function brushPreview(p) {
+  const W = 300, H = 88;
+  const c = makeCanvas(W, H);
+  const g = ctx2d(c);
+  const ink = [29, 36, 51];
+  const path = (t) => ({ x: 18 + t * (W - 36), y: H / 2 + Math.sin(t * Math.PI * 2) * 14 });
+  const tip = p.mode === 'erase' ? tipCanvas(p) : tintedTip(p, [...ink, 1]);
+  const maxSize = clamp(p.size * 520, 5, 46);
+  if (p.mode === 'erase' || p.mode === 'smudge') {
+    // Show the effect on a band of colour.
+    const grad = g.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, '#ff7a45'); grad.addColorStop(0.5, '#ffc14d'); grad.addColorStop(1, '#4c8dff');
+    g.fillStyle = grad;
+    g.fillRect(0, H / 2 - 22, W, 44);
+  }
+  if (p.mode === 'smudge') {
+    for (let t = 0; t <= 1; t += 0.01) {
+      const a = path(t), s = maxSize;
+      g.save(); g.globalAlpha = 0.25; g.beginPath(); g.arc(a.x, a.y, s / 2, 0, Math.PI * 2); g.clip();
+      g.drawImage(c, -6, 0); g.restore();
+    }
+    return c;
+  }
+  g.globalCompositeOperation = p.mode === 'erase' ? 'destination-out' : 'source-over';
+  const taperIn = clamp((p.taperStart || 0) * 3, 0, 0.45), taperOut = clamp((p.taperEnd || 0) * 3, 0, 0.45);
+  const step = Math.max(0.6, maxSize * clamp(p.spacing, 0.02, 1) * 0.6);
+  let len = 0, prev = path(0);
+  for (let t = 0; t <= 1; t += 0.002) {
+    const pt = path(t);
+    len += Math.hypot(pt.x - prev.x, pt.y - prev.y);
+    prev = pt;
+    if (len < step) continue;
+    len = 0;
+    let k = 1;
+    if (taperIn && t < taperIn) k = t / taperIn;
+    if (taperOut && t > 1 - taperOut) k = Math.min(k, (1 - t) / taperOut);
+    const size = Math.max(1, maxSize * (0.25 + 0.75 * k) * (0.85 + 0.3 * Math.sin(t * 9)));
+    g.globalAlpha = clamp((p.opacity ?? 1) * (p.flow ?? 1), 0.05, 1) * (0.6 + 0.4 * k);
+    g.save();
+    g.translate(pt.x, pt.y);
+    g.rotate((p.shapeAngle || 0) * Math.PI);
+    g.drawImage(tip, -size / 2, -size / 2, size, size);
+    g.restore();
+  }
+  return c;
+}
