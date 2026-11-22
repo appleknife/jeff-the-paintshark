@@ -87,6 +87,7 @@ async function boot() {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
   if (isIPad) document.documentElement.classList.add('ipad');
+  guardPageZoom();
   // Ask the browser not to evict the gallery under storage pressure.
   navigator.storage?.persist?.().catch(() => {});
   state.saveDoc = saveDoc;
@@ -105,6 +106,36 @@ async function boot() {
 
 let galleryUrls = [];
 let galleryToken = 0;
+
+/**
+ * iPad Safari ignores user-scalable=no, so a pinch that starts on a toolbar (or a double tap)
+ * can zoom the whole page. Touch positions are then reported in a different coordinate space
+ * and paint lands away from your finger. Block those gestures, and if the page does end up
+ * zoomed, snap it back to 100%.
+ */
+function guardPageZoom() {
+  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+  }
+  let lastEnd = 0;
+  document.addEventListener('touchend', (e) => {
+    const now = performance.now();
+    // Double-tap-to-zoom outside text fields.
+    if (now - lastEnd < 320 && !e.target.closest?.('input, textarea, select')) e.preventDefault();
+    lastEnd = now;
+  }, { passive: false });
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const meta = document.querySelector('meta[name=viewport]');
+  const base = meta.getAttribute('content');
+  vv.addEventListener('resize', () => {
+    if (vv.scale <= 1.01 || document.activeElement?.matches?.('input, textarea')) return;
+    // Re-applying a viewport with maximum-scale=1 makes Safari zoom back out.
+    meta.setAttribute('content', `${base},maximum-scale=1`);
+    setTimeout(() => meta.setAttribute('content', base), 300);
+    setTimeout(() => state.view?.resize(), 350);
+  });
+}
 
 async function renderGallery() {
   const token = ++galleryToken;
