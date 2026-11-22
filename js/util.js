@@ -91,6 +91,96 @@ export function makeCanvas(w, h) {
   return c;
 }
 
+// iOS Safari frees canvas backing memory lazily and caps the total (~384 MB), so
+// temporary canvases are shrunk to zero as soon as they are no longer needed.
+export function releaseCanvas(c) {
+  if (!c) return;
+  c.width = 0;
+  c.height = 0;
+}
+
+export const isAppleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
+// Safari caps a single canvas at 16,777,216 pixels and all canvases together at ~384 MB.
+export const MAX_CANVAS_AREA = 16777216;
+export const CANVAS_BUDGET = isAppleMobile ? 300 * 1024 * 1024 : 2048 * 1024 * 1024;
+
+export function fitArea(w, h, max = MAX_CANVAS_AREA) {
+  if (w * h <= max) return [w, h];
+  const k = Math.sqrt(max / (w * h));
+  return [Math.max(1, Math.floor(w * k)), Math.max(1, Math.floor(h * k))];
+}
+
+let filterOk = null;
+// Safari does not support CanvasRenderingContext2D.filter; detect it so callers can fall back.
+export function canvasFilterSupported() {
+  if (filterOk !== null) return filterOk;
+  try {
+    const g = document.createElement('canvas').getContext('2d');
+    g.filter = 'blur(2px)';
+    filterOk = g.filter === 'blur(2px)';
+  } catch { filterOk = false; }
+  return filterOk;
+}
+
+// Approximate gaussian blur: three box-blur passes on premultiplied RGBA, in place.
+export function blurImageData(img, radius) {
+  const r = Math.max(0, Math.round(radius)); // 3 box passes of radius r ≈ gaussian sigma r
+  if (!r) return img;
+  const { width: w, height: h, data } = img;
+  const buf = new Float32Array(w * h * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3] / 255;
+    buf[i] = data[i] * a; buf[i + 1] = data[i + 1] * a; buf[i + 2] = data[i + 2] * a; buf[i + 3] = data[i + 3];
+  }
+  const tmp = new Float32Array(buf.length);
+  const pass = (src, dst, len, count, stride, step) => {
+    const norm = 1 / (2 * r + 1);
+    for (let line = 0; line < count; line++) {
+      const base = line * stride;
+      for (let ch = 0; ch < 4; ch++) {
+        let acc = 0;
+        for (let k = -r; k <= r; k++) acc += src[base + Math.min(len - 1, Math.max(0, k)) * step + ch];
+        for (let x = 0; x < len; x++) {
+          dst[base + x * step + ch] = acc * norm;
+          const add = Math.min(len - 1, x + r + 1), sub = Math.max(0, x - r);
+          acc += src[base + add * step + ch] - src[base + sub * step + ch];
+        }
+      }
+    }
+  };
+  for (let p = 0; p < 3; p++) {
+    pass(buf, tmp, w, h, w * 4, 4);
+    pass(tmp, buf, h, w, 4, w * 4);
+  }
+  for (let i = 0; i < data.length; i += 4) {
+    const a = buf[i + 3];
+    const k = a > 0 ? 255 / a : 0;
+    data[i] = buf[i] * k; data[i + 1] = buf[i + 1] * k; data[i + 2] = buf[i + 2] * k; data[i + 3] = a;
+  }
+  return img;
+}
+
+// Draw `src` blurred into `dst` (same size), natively where possible.
+export function drawBlurred(dst, src, radius) {
+  const g = ctx2d(dst);
+  if (radius <= 0) { g.drawImage(src, 0, 0); return; }
+  if (canvasFilterSupported()) {
+    g.filter = `blur(${radius}px)`;
+    g.drawImage(src, 0, 0);
+    g.filter = 'none';
+    return;
+  }
+  const img = ctx2d(src).getImageData(0, 0, src.width, src.height);
+  blurImageData(img, radius);
+  const t = document.createElement('canvas');
+  t.width = src.width; t.height = src.height;
+  ctx2d(t).putImageData(img, 0, 0);
+  g.drawImage(t, 0, 0);
+  releaseCanvas(t);
+}
+
 export function ctx2d(canvas, opts = {}) {
   return canvas.getContext('2d', { alpha: true, willReadFrequently: true, ...opts });
 }

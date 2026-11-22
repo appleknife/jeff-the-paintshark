@@ -103,9 +103,11 @@ const rngFrom = (seed) => {
 
 const tipCache = new Map();
 
+const tipKey = (p) => [p.shape, p.shapeRoundness, p.hardness ?? 0.55, p.grain, p.grainDepth, p.grainScale,
+  p.grainInverted, p.shapeInverted, p.textureDepth].join('|');
+
 export function tipCanvas(preset) {
-  const key = [preset.shape, preset.shapeRoundness, preset.grain, preset.grainDepth, preset.grainScale,
-    preset.grainInverted, preset.shapeInverted, preset.textureDepth].join('|');
+  const key = tipKey(preset);
   if (tipCache.has(key)) return tipCache.get(key);
   const size = 256;
   const c = makeCanvas(size, size);
@@ -133,10 +135,11 @@ export function tipCanvas(preset) {
     g.globalAlpha = 1;
   } else {
     const fat = clamp(preset.shapeRoundness, 0.08, 1);
+    const hard = clamp(preset.hardness ?? 0.55, 0.01, 0.94);
     const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.5);
     grad.addColorStop(0, 'rgba(255,255,255,1)');
-    grad.addColorStop(0.55, 'rgba(255,255,255,0.95)');
-    grad.addColorStop(0.82, 'rgba(255,255,255,0.55)');
+    grad.addColorStop(hard, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(hard + (1 - hard) * 0.6, 'rgba(255,255,255,0.55)');
     grad.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = grad;
     g.save();
@@ -214,7 +217,7 @@ const tintCache = new Map();
 export function tintedTip(preset, color) {
   const base = tipCanvas(preset);
   if (!color) return base;
-  const key = `${preset.shape}|${preset.grain}|${preset.grainDepth}|${preset.shapeRoundness}|${color.join(',')}`;
+  const key = `${tipKey(preset)}|${color.join(',')}`;
   if (tintCache.has(key)) return tintCache.get(key);
   const c = makeCanvas(base.width, base.height);
   const g = ctx2d(c);
@@ -239,14 +242,24 @@ export class Stroke {
     this.enabled = true;
     this.last = null;
     this.smooth = null;
-    this.distance = 0;
-    this.taperPos = 0;
+    this.prevSmooth = null;
     this.totalLength = 0;
     this.tip = this.mode === 'erase' ? tipCanvas(this.brush) : (this.color ? tintedTip(this.brush, this.color) : tipCanvas(this.brush));
-    this.strokeCanvas = makeCanvas(this.doc.width, this.doc.height);
+    // One shared, reused buffer per document instead of a new full-size canvas per stroke.
+    this.strokeCanvas = this.doc.strokeBuffer();
     this.sg = ctx2d(this.strokeCanvas);
-    this._wetColor = null;
-    this.baseAspect = this.brush.stamp ? 1 : clamp(this.brush.shapeRoundness, 0.1, 1);
+    this.bbox = null;
+    // The tip is already squashed by shapeRoundness; don't squash it a second time here.
+    this.baseAspect = 1;
+  }
+
+  _grow(x, y, r) {
+    const b = this.bbox;
+    if (!b) { this.bbox = { x0: x - r, y0: y - r, x1: x + r, y1: y + r }; return; }
+    if (x - r < b.x0) b.x0 = x - r;
+    if (y - r < b.y0) b.y0 = y - r;
+    if (x + r > b.x1) b.x1 = x + r;
+    if (y + r > b.y1) b.y1 = y + r;
   }
 
   _pressureScale(p, tiltMag, speed) {
@@ -272,8 +285,10 @@ export class Stroke {
     const opacity = clamp(b.opacity * pa * (b.flow || 1), 0, 1);
     const angle = (b.shapeAngle * Math.PI) + (b.shapeAzimuth && tilt > 0.02 ? azimuth : 0);
     const scatter = b.shapeScatter * base * 2;
+    const reach = size * 0.75 + scatter + b.jitter * size * 0.2 + 2;
 
     const drawOne = (sx, sy, rot) => {
+      this._grow(sx, sy, reach);
       for (let i = 0; i < Math.max(1, Math.round(b.shapeCount || 1)); i++) {
         let dx = 0, dy = 0;
         if (scatter > 0) {
@@ -296,8 +311,10 @@ export class Stroke {
     };
 
     const rot = angle + (b.angleJitter ? (Math.random() - 0.5) * b.angleJitter * Math.PI : 0);
-    if (this.mode === 'smudge') this._smudge(x, y, size, opacity, rot);
-    else {
+    if (this.mode === 'smudge') {
+      this._grow(x, y, size + 2);
+      this._smudge(x, y, size, opacity, rot);
+    } else {
       if (b.wetMix > 0 && this.layer) this._wet(x, y, size, b.wetMix);
       drawOne(x, y, rot);
       this._mirror(drawOne, x, y, rot);
@@ -334,10 +351,13 @@ export class Stroke {
   _mirror(draw, x, y, rot) {
     if (this.symmetry === 'off') return;
     const w = this.doc.width, h = this.doc.height;
-    if (this.symmetry.includes('x')) draw(w - x, y, -rot);
-    if (this.symmetry.includes('y')) draw(x, h - y, Math.PI - rot);
-    if (this.symmetry.includes('quad')) { draw(w - x, h - y, rot + Math.PI); }
-    if (this.symmetry === 'radial' || this.symmetry === 'rotational') {
+    if (this.symmetry === 'x') draw(w - x, y, -rot);
+    else if (this.symmetry === 'y') draw(x, h - y, Math.PI - rot);
+    else if (this.symmetry === 'quad') {
+      draw(w - x, y, -rot);
+      draw(x, h - y, Math.PI - rot);
+      draw(w - x, h - y, rot + Math.PI);
+    } else if (this.symmetry === 'radial' || this.symmetry === 'rotational') {
       const cx = w / 2, cy = h / 2, r = Math.hypot(x - cx, y - cy);
       const a0 = Math.atan2(y - cy, x - cx);
       const n = 6;
@@ -345,22 +365,33 @@ export class Stroke {
         const a = a0 + (i * Math.PI * 2) / n;
         draw(cx + Math.cos(a) * r, cy + Math.sin(a) * r, rot + (i * Math.PI * 2) / n);
       }
+      // Radial symmetry also mirrors each spoke; rotational only repeats it.
+      if (this.symmetry === 'radial') {
+        const m = Math.atan2(y - cy, -(x - cx));
+        for (let i = 0; i < n; i++) {
+          const a = m + (i * Math.PI * 2) / n;
+          draw(cx + Math.cos(a) * r, cy + Math.sin(a) * r, -rot + (i * Math.PI * 2) / n);
+        }
+      }
     }
   }
 
   begin(pt) {
     const p = { ...pt, t: performance.now() };
     this.smooth = { ...p };
+    this.prevSmooth = { ...p };
     this.last = p;
-    this.taperPos = 0;
     this.totalLength = 0;
+    this.origin = p;
+    this.moved = false;
     this.sg.globalCompositeOperation = 'source-over';
-    this._stamp(p.x, p.y, p.pressure, p.tilt, p.azimuth, 0, 0);
+    this._stamp(p.x, p.y, p.pressure, p.tilt, p.azimuth, 0, this._taperAmount(0));
   }
 
   move(pt) {
     if (!this.smooth) return;
     const p = { ...pt, t: performance.now() };
+    this.raw = { ...pt };
     const s = this.brush.streamline;
     const mf = this.brush.motionFilter;
     this.smooth.x = lerp(this.smooth.x, p.x, 1 - s * 0.82);
@@ -368,68 +399,87 @@ export class Stroke {
     this.smooth.pressure = lerp(this.smooth.pressure, p.pressure, 1 - mf * 0.7);
     this.smooth.tilt = lerp(this.smooth.tilt, p.tilt, 1 - mf * 0.5);
     this.smooth.azimuth = p.azimuth;
+    this.smooth.t = p.t;
+    this.totalLength += Math.hypot(this.smooth.x - this.prevSmooth.x, this.smooth.y - this.prevSmooth.y);
+    this.prevSmooth = { ...this.smooth };
+
+    // `last` is the position of the last stamp. It only advances when a stamp is placed, so
+    // slow, short pencil moves accumulate until they cover one spacing step. (Previously it
+    // jumped to the pointer every event, so slow strokes dropped every stamp and left gaps.)
     const from = this.last;
     const to = this.smooth;
     const dx = to.x - from.x, dy = to.y - from.y;
     const dist = Math.hypot(dx, dy);
-    if (dist < 0.01) return;
     const spacing = Math.max(0.35, this.brush.spacing * Math.max(1, this.brush.size * this.doc.width));
-    const speed = dist / Math.max(1, p.t - from.t);
-    this.totalLength += dist;
+    const speed = dist / Math.max(1, to.t - from.t);
     let travelled = 0;
-    while (travelled + spacing <= dist) {
-      travelled += spacing * (1 + (Math.random() - 0.5) * (this.brush.spacingJitter || 0));
+    let stamped = false;
+    for (;;) {
+      const step = spacing * (1 + (Math.random() - 0.5) * (this.brush.spacingJitter || 0));
+      if (travelled + step > dist) break;
+      travelled += step;
       const f = travelled / dist;
       const x = from.x + dx * f, y = from.y + dy * f;
-      const taper = this._taperAmount(this.totalLength);
+      const taper = this._taperAmount(this.totalLength - (dist - travelled));
       this._stamp(x, y, to.pressure, to.tilt, to.azimuth, speed, taper);
+      stamped = true;
     }
-    this.last = { ...to };
+    if (stamped) {
+      this.moved = true;
+      const f = travelled / dist;
+      this.last = { ...to, x: from.x + dx * f, y: from.y + dy * f };
+    }
   }
 
   _taperAmount(len) {
     const b = this.brush;
     const startLen = b.taperStart * this.doc.width * 0.5;
-    const endLen = b.taperEnd * this.doc.width * 0.5;
-    let t = 0;
-    if (startLen > 0 && len < startLen) t = Math.max(t, 1 - len / startLen);
-    if (endLen > 0) {
-      this._endLen = endLen;
-    }
-    return t;
+    if (startLen > 0 && len < startLen) return 1 - len / startLen;
+    return 0;
   }
 
   end() {
-    if (this._endLen > 0 && this.last) {
-      const n = 8;
-      for (let i = 1; i <= n; i++) {
-        const f = 1 - i / (n + 1);
-        this._stamp(this.last.x, this.last.y, this.last.pressure, this.last.tilt, this.last.azimuth, 0, 1 - f);
-      }
+    // Finish the line up to where the pen lifted (it may lag behind because of streamline).
+    if (this.raw && this.brush.streamline > 0) {
+      for (let i = 0; i < 6; i++) this.move({ ...this.raw });
+    }
+    // A tap with a tapered brush would otherwise leave nothing (the first stamp is fully tapered).
+    if (!this.moved && this.origin && this._taperAmount(0) > 0) {
+      const o = this.origin;
+      this._stamp(o.x, o.y, o.pressure, o.tilt, o.azimuth, 0, 0.5);
     }
     this.commit();
   }
 
+  /** Throw the stroke away without touching the layer (e.g. a second finger turned it into a gesture). */
+  cancel() {
+    this.enabled = false;
+    this.sg.clearRect(0, 0, this.doc.width, this.doc.height);
+  }
+
   commit() {
-    this.doc.pushUndo(this.layer);
+    if (!this.enabled) return;
+    this.enabled = false;
+    if (!this.bbox) return;
+    const b = this.bbox;
+    this.doc.pushUndo(this.layer, { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 });
     const lc = this.layer.canvas;
     const lctx = ctx2d(lc);
     lctx.save();
     if (this.layer.alphaLock) lctx.globalCompositeOperation = 'source-atop';
     if (this.mode === 'erase') lctx.globalCompositeOperation = 'destination-out';
     if (this.selection) {
-      const mask = this.selection.maskCanvas();
-      const tmp = this.strokeCanvas;
-      const tg = ctx2d(tmp);
+      const tg = this.sg;
+      tg.save();
+      tg.setTransform(1, 0, 0, 1, 0, 0);
+      tg.globalAlpha = 1;
       tg.globalCompositeOperation = 'destination-in';
-      tg.drawImage(mask, 0, 0);
-      tg.globalCompositeOperation = 'source-over';
+      tg.drawImage(this.selection.maskCanvas(), 0, 0);
+      tg.restore();
     }
-    if (this.layer.opacity < 1) lctx.globalAlpha = 1;
     lctx.drawImage(this.strokeCanvas, 0, 0);
     lctx.restore();
     this.doc.emit('strokeEnd', { layer: this.layer });
-    this.enabled = false;
   }
 }
 

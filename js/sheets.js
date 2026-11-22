@@ -1,16 +1,16 @@
 import {
-  $, $$, el, clamp, uid, makeCanvas, ctx2d, download, canvasToBlob, hsvToRgb,
+  $, $$, el, clamp, uid, makeCanvas, ctx2d, download, canvasToBlob, hsvToRgb, releaseCanvas,
 } from './util.js';
 import { BLEND_MODES } from './brush.js';
 import { ADJUSTMENTS, applyAdjustment, defaultParams } from './adjust.js';
 import { LIQUIFY_MODES } from './transform.js';
-import { state, toast, sheet, field, gestures } from './appstate.js';
+import { state, toast, sheet, field, gestures, closeSheet } from './appstate.js';
+import { Timelapse } from './timelapse.js';
 import * as store from './store.js';
 
 export async function exportSheet() {
   const doc = state.doc;
   if (!doc) return;
-  const flat = doc.flatten();
   sheet((body, close) => {
     body.append(el('h3', {}, 'Export'));
     body.append(el('p', { class: 'hint' }, 'PNG keeps transparency. Scale is relative to the canvas size.'));
@@ -20,31 +20,43 @@ export async function exportSheet() {
     const crop = el('select', {}, el('option', { value: 'doc' }, 'Whole canvas'), el('option', { value: 'sel' }, 'Selection'));
     body.append(field('File name', name), field('Format', fmt), field('Scale', scale), field('Area', crop));
     body.append(el('div', { class: 'row' },
-      el('button', { class: 'btn', onclick: async () => { await exportDocument(); } }, 'Save .paintshark'),
+      el('button', { class: 'btn', onclick: async () => { await exportDocument().catch((e) => toast(e.message)); } }, 'Save .paintshark'),
       el('span', { class: 'spacer' }),
       el('button', {
         class: 'btn primary',
         onclick: async () => {
           close();
-          await exportImage(flat, {
+          await exportImage({
             name: name.value || 'artwork', type: fmt.value, scale: +scale.value,
             selection: crop.value === 'sel' ? state.sel : null,
-          });
+          }).catch((e) => toast(e.message || 'Export failed'));
         },
       }, 'Export')));
   });
 }
 
-async function exportImage(flat, { name, type, scale, selection }) {
+async function exportImage({ name, type, scale, selection }) {
   const doc = state.doc;
-  let source = flat;
+  // Render at the moment of export (the sheet used to flatten when it opened).
+  let source = doc.compositeCanvas();
+  let sx = 0, sy = 0, sw = doc.width, sh = doc.height, tmp = null;
   if (selection && selection.active) {
-    source = makeCanvas(doc.width, doc.height);
-    ctx2d(source).drawImage(flat, 0, 0);
-    selection.applyToCanvas(source);
+    tmp = makeCanvas(doc.width, doc.height);
+    ctx2d(tmp).drawImage(source, 0, 0);
+    selection.applyToCanvas(tmp);
+    source = tmp;
+    // Crop to the selected area.
+    const b = selection.bounds();
+    if (b) ({ x: sx, y: sy, w: sw, h: sh } = b);
   }
-  const w = Math.max(1, Math.round(doc.width * scale));
-  const h = Math.max(1, Math.round(doc.height * scale));
+  let w = Math.max(1, Math.round(sw * scale));
+  let h = Math.max(1, Math.round(sh * scale));
+  // 2× of a big canvas can exceed Safari's 16.7-megapixel canvas limit.
+  if (w * h > 16777216) {
+    const k = Math.sqrt(16777216 / (w * h));
+    w = Math.floor(w * k); h = Math.floor(h * k);
+    toast(`Scaled down to ${w} × ${h} (Safari limit)`);
+  }
   const out = makeCanvas(w, h);
   const g = ctx2d(out);
   if (type === 'jpeg') {
@@ -52,15 +64,22 @@ async function exportImage(flat, { name, type, scale, selection }) {
     g.fillRect(0, 0, w, h);
   }
   g.imageSmoothingQuality = 'high';
-  g.drawImage(source, 0, 0, w, h);
-  const mime = type === 'jpeg' ? 'image/jpeg' : type === 'webp' ? 'image/webp' : 'image/png';
-  const blob = await canvasToBlob(out, mime, type === 'png' ? undefined : 0.92);
-  const ext = type === 'jpeg' ? 'jpg' : type;
-  if (navigator.canShare && navigator.canShare({ files: [new File([blob], 'x')] })) {
+  g.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
+  releaseCanvas(tmp);
+  let mime = type === 'jpeg' ? 'image/jpeg' : type === 'webp' ? 'image/webp' : 'image/png';
+  let blob = await canvasToBlob(out, mime, type === 'png' ? undefined : 0.92);
+  releaseCanvas(out);
+  if (!blob) throw new Error('Export failed');
+  // Safari can't encode WebP and quietly hands back a PNG instead.
+  if (blob.type && blob.type !== mime) mime = blob.type;
+  const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+  if (ext !== type && !(type === 'jpeg' && ext === 'jpg')) toast(`${type.toUpperCase()} isn't supported here — saved as ${ext.toUpperCase()}`);
+  const file = new File([blob], `${name}.${ext}`, { type: mime });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [new File([blob], `${name}.${ext}`, { type: mime })] });
+      await navigator.share({ files: [file] });
       return;
-    } catch { /* fall through */ }
+    } catch (e) { if (e?.name === 'AbortError') return; }
   }
   download(blob, `${name}.${ext}`);
 }
@@ -71,7 +90,7 @@ export async function exportDocument() {
   const blob = await doc.serialize();
   const file = new File([blob], `${doc.name || 'artwork'}.paintshark`, { type: 'application/zip' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); return; } catch { /* noop */ }
+    try { await navigator.share({ files: [file] }); return; } catch (e) { if (e?.name === 'AbortError') return; }
   }
   download(blob, `${doc.name || 'artwork'}.paintshark`);
 }
@@ -105,19 +124,32 @@ export function timelapseSheet() {
   const tl = state.timelapse;
   sheet((body, close) => {
     body.append(el('h3', {}, 'Time-lapse'));
-    body.append(el('p', { class: 'hint' }, `${tl ? tl.frames.length : 0} frames recorded. Playback and export happen locally.`));
-    const img = el('img', { class: 'timelapse-frame' });
+    const count = el('p', { class: 'hint' }, `${tl ? tl.frames.length : 0} frames recorded. Playback and export happen locally. Frames are kept until you leave this canvas.`);
+    body.append(count);
+    const img = el('img', { class: 'timelapse-frame', alt: '' });
+    if (tl?.frames.length) img.src = tl.frames[tl.frames.length - 1];
     body.append(img);
+    const exportBtn = el('button', { class: 'btn' }, 'Export video');
+    exportBtn.onclick = async () => {
+      if (!tl) return;
+      exportBtn.disabled = true;
+      exportBtn.textContent = 'Encoding…';
+      try { await tl.exportVideo(); } catch (e) { toast(e.message); }
+      exportBtn.disabled = false;
+      exportBtn.textContent = 'Export video';
+    };
+    if (!Timelapse.recordingType()) exportBtn.disabled = true;
     body.append(el('div', { class: 'row' },
       el('button', {
         class: 'btn',
-        onclick: () => tl.playback(body.querySelector('.sheet-body') || body, 12),
+        // Play into the preview image (this used to wipe the whole sheet, buttons included).
+        onclick: () => tl?.frames.length && tl.playback(img, 12),
       }, 'Play'),
-      el('button', { class: 'btn', onclick: () => tl.exportWebm().catch((e) => toast(e.message)) }, 'Export video'),
+      exportBtn,
       el('span', { class: 'spacer' }),
       el('button', {
         class: 'btn danger',
-        onclick: () => { tl.frames = []; toast('Recording cleared'); },
+        onclick: () => { if (!tl) return; tl.frames = []; img.removeAttribute('src'); count.textContent = '0 frames recorded.'; toast('Recording cleared'); },
       }, 'Clear'),
       el('button', { class: 'btn primary', onclick: close }, 'Done')));
   });
@@ -156,8 +188,8 @@ let adjustPreviewUndo = null;
 export function adjustSheet() {
   const doc = state.doc;
   if (!doc) return;
-  const layer = doc.active;
-  if (!layer) return;
+  const layer = doc.paintable;
+  if (!layer) { toast('Pick a paint layer to adjust'); return; }
   sheet((body, close) => {
     body.append(el('h3', {}, 'Adjustments'));
     body.append(el('p', { class: 'hint' }, 'Applied to the selected layer. Undo restores it.'));
@@ -230,7 +262,7 @@ export function adjustSheet() {
         b.oninput = () => { params.b = b.value; };
         controls.append(field('Color A', a), field('Color B', b));
       } else if (kind.value === 'curves') {
-        body.append(el('p', { class: 'hint' }, 'Edit points in a future pass; default is linear.'));
+        controls.append(el('p', { class: 'hint' }, 'Edit points in a future pass; default is linear.'));
       }
     };
     kind.onchange = rebuild;
@@ -241,7 +273,7 @@ export function adjustSheet() {
         class: 'btn primary',
         onclick: () => {
           doc.pushUndo(layer);
-          applyAdjustment(doc, layer, kind.value, params);
+          applyAdjustment(doc, layer, kind.value, params, state.sel?.active ? state.sel : null);
           close();
           toast('Adjustment applied');
         },
@@ -250,7 +282,7 @@ export function adjustSheet() {
 }
 
 export function brushesSheet() {
-  sheet((body) => {
+  sheet((body, close) => {
     body.append(el('h3', {}, 'Brushes'));
     body.append(el('p', { class: 'hint' }, 'Presets live on this device. Tweak one in Brush Studio and save it.'));
     const grid = el('div', { class: 'preset-grid' });
@@ -268,24 +300,27 @@ export function brushesSheet() {
       g.bezierCurveTo(44, 4, 76, 32, 128, 12);
       g.stroke();
       card.append(c, el('b', {}, p.name), el('span', {}, `${Math.round(p.size * 1000)} · ${p.spacing.toFixed(2)}`));
-      card.onclick = () => { state.selectBrush?.(p); closeSheetRef(); };
+      card.onclick = () => {
+        state.selectBrush?.(p);
+        // Picking a smudge/eraser preset switches to that tool.
+        if (p.mode === 'smudge' || p.mode === 'erase') state.setTool?.(p.mode);
+        else if (state.tool !== 'brush') state.setTool?.('brush');
+        close();
+      };
       grid.append(card);
     }
     body.append(grid);
   });
 }
 
-function closeSheetRef() {
-  document.querySelector('#sheet').classList.add('hidden');
-}
 
 export function quickMenu() {
   sheet((body, close) => {
     body.append(el('h3', {}, 'QuickMenu'));
     const grid = el('div', { class: 'preset-grid' });
     const items = [
-      ['Undo', () => state.doc?.undo()],
-      ['Redo', () => state.doc?.redo()],
+      ['Undo', () => state.undo?.()],
+      ['Redo', () => state.redo?.()],
       ['Clear layer', () => clearLayer()],
       ['New layer', () => state.doc?.addLayer()],
       ['Flip H', () => flipLayer(true)],
@@ -306,35 +341,41 @@ export function quickMenu() {
 
 export function clearLayer() {
   const doc = state.doc;
-  const l = doc?.active;
+  const l = doc?.paintable;
   if (!l) return;
   doc.pushUndo(l);
-  ctx2d(l.canvas).clearRect(0, 0, doc.width, doc.height);
-  state.refreshView?.();
+  const g = ctx2d(l.canvas);
+  if (state.sel?.active) {
+    g.save();
+    g.globalCompositeOperation = 'destination-out';
+    g.drawImage(state.sel.canvas, 0, 0);
+    g.restore();
+  } else g.clearRect(0, 0, doc.width, doc.height);
+  doc.emit('strokeEnd', { layer: l });
   toast('Layer cleared');
 }
 
 function flipLayer(horizontal) {
   const doc = state.doc;
-  const l = doc?.active;
+  const l = doc?.paintable;
   if (!l) return;
   doc.pushUndo(l);
+  const img = ctx2d(l.canvas).getImageData(0, 0, doc.width, doc.height);
   const tmp = makeCanvas(doc.width, doc.height);
-  const g = ctx2d(tmp);
+  ctx2d(tmp).putImageData(img, 0, 0);
+  const g = ctx2d(l.canvas);
+  g.save();
+  g.clearRect(0, 0, doc.width, doc.height);
   g.translate(horizontal ? doc.width : 0, horizontal ? 0 : doc.height);
   g.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
-  g.drawImage(l.canvas, 0, 0);
-  ctx2d(l.canvas).clearRect(0, 0, doc.width, doc.height);
-  ctx2d(l.canvas).drawImage(tmp, 0, 0);
-  state.view.request();
+  g.drawImage(tmp, 0, 0);
+  g.restore();
+  releaseCanvas(tmp);
+  doc.emit('strokeEnd', { layer: l });
 }
 
 export function toggleFullscreen() {
-  state.fullscreen = !state.fullscreen;
-  document.body.classList.toggle('fullscreen', state.fullscreen);
-  $('#toolRail').classList.toggle('hidden', state.fullscreen);
-  $('.bottombar').classList.toggle('hidden', state.fullscreen);
-  setTimeout(() => state.view?.resize(), 30);
+  state.toggleFullscreen?.();
 }
 
 export function settingsSheet() {
@@ -351,7 +392,13 @@ export function settingsSheet() {
       body.append(field(key.replace(/([A-Z])/g, ' $1').toLowerCase(), s));
     }
     body.append(el('div', { class: 'row' },
-      el('button', { class: 'btn', onclick: async () => { await state.saveDoc?.(false); toast('Saved now'); } }, 'Save now'),
+      el('button', {
+        class: 'btn',
+        onclick: async () => {
+          if (!state.doc) { toast('Open a canvas first'); return; }
+          try { await state.saveDoc?.(false); toast('Saved now'); } catch { /* toast shown by saveDoc */ }
+        },
+      }, 'Save now'),
       el('span', { class: 'spacer' }),
       el('button', { class: 'btn primary', onclick: close }, 'Done')));
   });

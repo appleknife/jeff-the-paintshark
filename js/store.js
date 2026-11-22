@@ -82,7 +82,7 @@ export function loadPalettes() {
 }
 
 export function savePalettes(p) {
-  localStorage.setItem(PALETTE_KEY, JSON.stringify(p));
+  try { localStorage.setItem(PALETTE_KEY, JSON.stringify(p)); } catch { /* storage full or private mode */ }
 }
 
 export function defaultPalettes() {
@@ -98,18 +98,19 @@ const PRESET_KEY = 'paintshark.presets.v1';
 export function loadPresets(fallback) {
   try {
     const p = JSON.parse(localStorage.getItem(PRESET_KEY));
-    return Array.isArray(p) && p.length ? p : fallback;
+    // Fill in settings added since a preset was saved, so older presets keep working.
+    return Array.isArray(p) && p.length ? p.map((x) => ({ ...fallback[0], dynamics: { ...fallback[0].dynamics }, ...x, dynamics: { ...fallback[0].dynamics, ...(x.dynamics || {}) } })) : fallback;
   } catch { return fallback; }
 }
 
 export function savePresets(p) {
-  localStorage.setItem(PRESET_KEY, JSON.stringify(p));
+  try { localStorage.setItem(PRESET_KEY, JSON.stringify(p)); } catch { /* storage full or private mode */ }
 }
 
 export function loadLibrary() {
   try { return JSON.parse(localStorage.getItem('paintshark.library.v1')) || []; } catch { return []; }
 }
-export function saveLibrary(l) { localStorage.setItem('paintshark.library.v1', JSON.stringify(l)); }
+export function saveLibrary(l) { try { localStorage.setItem('paintshark.library.v1', JSON.stringify(l)); } catch { /* full */ } }
 
 export async function putRaw(rec) {
   const db = await open();
