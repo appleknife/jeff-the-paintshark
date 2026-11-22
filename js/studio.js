@@ -1,9 +1,9 @@
-import { $, $$, el, clamp, uid, makeCanvas, ctx2d } from './util.js';
+import { $, $$, el, clamp, uid, makeCanvas, ctx2d, releaseCanvas } from './util.js';
 import { BLEND_MODES, defaultPreset, clearTipCache } from './brush.js';
 import { state, toast, sheet } from './appstate.js';
 import { exportSheet, guideSheet, timelapseSheet, liquifySheet, adjustSheet, brushesSheet,
   quickMenu, settingsSheet, textSheet } from './sheets.js';
-import { setupColor, syncColorUI, selectBrush, startTransform, placeText, toggleReference } from './studio2.js';
+import { setupColor, syncColorUI, selectBrush, syncBrushSliders, startTransform, cancelTransform, placeText, toggleReference } from './studio2.js';
 import { buildStudio } from './brushstudio.js';
 import * as store from './store.js';
 
@@ -28,14 +28,21 @@ export function setupStudio() {
   $('#layerAdd').onclick = () => state.doc?.addLayer();
   $('#layerDup').onclick = () => state.doc?.duplicateLayer();
   $('#layerDel').onclick = () => state.doc?.removeLayer();
-  $('#layerGroup').onclick = () => state.doc?.groupSelected([state.doc.activeId]);
+  $('#layerGroup').onclick = () => {
+    const doc = state.doc;
+    if (!doc) return;
+    const l = doc.active;
+    // Group the active layer together with the layer below it (like a quick two-layer group).
+    const below = l ? doc.parentList(l)[doc.parentList(l).indexOf(l) - 1] : null;
+    doc.groupSelected(below ? [below.id, l.id] : [doc.activeId]);
+  };
   $('#layerMerge').onclick = mergeDown;
   $('#alphaLock').onclick = () => toggleFlag('alphaLock');
   $('#clipMask').onclick = () => toggleFlag('clipping');
   $('#layerMask').onclick = toggleMask;
   $('#blendSelect').onchange = (e) => {
     const l = state.doc?.active;
-    if (l) { l.blend = e.target.value; state.view.request(); }
+    if (l) { l.blend = e.target.value; state.view.request(); state.maybeAutosave?.(); }
   };
   $('#layerOpacity').oninput = (e) => {
     const l = state.doc?.active;
@@ -43,6 +50,7 @@ export function setupStudio() {
     l.opacity = +e.target.value / 100;
     $('#layerOpacityVal').textContent = `${e.target.value}%`;
     state.view.request();
+    state.maybeAutosave?.();
   };
   $('#presetsBtn').onclick = brushesSheet;
   $('#quickMenuBtn').onclick = quickMenu;
@@ -59,7 +67,7 @@ export function setupStudio() {
   };
   $('#sizeSlider').oninput = (e) => {
     state.brush.size = +e.target.value / 1000;
-    $('#sizeVal').textContent = `${e.target.value}%`;
+    $('#sizeVal').textContent = e.target.value;
     state.view.request();
   };
   $('#opacitySlider').oninput = (e) => {
@@ -67,16 +75,24 @@ export function setupStudio() {
     $('#opacityVal').textContent = `${e.target.value}%`;
   };
   $('#softSlider').oninput = (e) => {
-    state.brush.shape = +e.target.value > 94 ? 'hard' : 'soft';
-    state.brush.shapeRoundness = clamp(+e.target.value / 120, 0.1, 1);
-    $('#softVal').textContent = `${e.target.value}%`;
+    // Edge hardness only. (This used to change shapeRoundness, which squashed the tip into an oval.)
+    const v = +e.target.value;
+    if (v > 94 && state.brush.shape === 'soft') state.brush.shape = 'hard';
+    else if (v <= 94 && state.brush.shape === 'hard') state.brush.shape = 'soft';
+    state.brush.hardness = clamp(v / 100, 0.01, 0.94);
+    $('#softVal').textContent = `${v}%`;
     clearTipCache();
   };
-  $('#resetBrush').onclick = () => { selectBrush(defaultPreset({ name: state.brush.name })); buildStudio(); };
+  $('#resetBrush').onclick = () => {
+    // Reset to the saved preset this brush came from, falling back to defaults.
+    const saved = state.presets.find((p) => p.id === state.brush.id);
+    selectBrush(saved || defaultPreset({ name: state.brush.name }));
+    buildStudio();
+  };
   $('#saveBrush').onclick = () => {
     const name = prompt('Preset name', state.brush.name);
     if (!name) return;
-    const p = { ...state.brush, id: uid(), name };
+    const p = { ...JSON.parse(JSON.stringify(state.brush)), id: uid(), name };
     state.presets.push(p);
     store.savePresets(state.presets);
     selectBrush(p);
@@ -88,6 +104,10 @@ export function setupStudio() {
   state.setTool = setTool;
   state.saveDoc = (show) => state.saveDocImpl?.(show);
   state.syncColorUI = syncColorUI;
+  state.toggleReference = toggleReference;
+  state.undo = doUndo;
+  state.syncBrushSliders = syncBrushSliders;
+  state.redo = doRedo;
   fillBlendOptions();
 }
 
@@ -113,8 +133,13 @@ function togglePanel(id) {
 
 export function setTool(tool) {
   if (!state.doc) return;
-  if (state.stroke) { state.stroke.end(); state.stroke = null; }
-  if (state.transform) state.commitTransform?.();
+  if (state.stroke) { state.stroke.end(); state.stroke = null; state.view.activeStroke = null; }
+  if (state.transform) {
+    const t = state.transform;
+    state.tool = 'none'; // keep commitTransform from recursing back into setTool
+    state.commitTransform?.();
+    if (state.transform === t) state.transform = null;
+  }
   state.tool = tool;
   const isBrush = ['brush', 'smudge', 'erase'].includes(tool);
   for (const t of $$('#toolRail .tool')) t.classList.toggle('on', t.dataset.tool === tool);
@@ -123,7 +148,7 @@ export function setTool(tool) {
   if (isBrush) state.brush.mode = tool;
   $('#selPanel')?.remove();
   if (tool === 'select') { showPanel('layersPanel'); $('#layersPanel').prepend(selectionPanelEl()); }
-  if (tool === 'transform') startTransform();
+  if (tool === 'transform' && !startTransform()) { setTool('brush'); return; }
   if (tool === 'liquify') liquifySheet();
   if (tool === 'adjust') adjustSheet();
   if (tool === 'text') textSheet(placeText);
@@ -136,11 +161,15 @@ function toggleFlag(flag) {
   l[flag] = !l[flag];
   renderLayers();
   state.view.request();
+  state.maybeAutosave?.();
 }
 
 function toggleMask() {
-  const l = state.doc?.active;
+  const doc = state.doc;
+  const l = doc?.active;
   if (!l) return;
+  if (!l.mask && !doc.canAllocate(1)) { toast('Not enough canvas memory for a mask'); return; }
+  doc.pushStructureUndo(); // removing a mask can be undone
   if (l.mask) l.mask = null;
   else {
     l.mask = makeCanvas(state.doc.width, state.doc.height);
@@ -150,27 +179,53 @@ function toggleMask() {
   }
   renderLayers();
   state.view.request();
+  state.maybeAutosave?.();
 }
 
-export function doUndo() { if (state.doc?.undo()) { state.view.request(); state.maybeAutosave?.(); } }
-export function doRedo() { if (state.doc?.redo()) { state.view.request(); state.maybeAutosave?.(); } }
+// Undo while transforming cancels the transform; undo mid-stroke is ignored.
+function readyForHistory() {
+  if (!state.doc || state.stroke) return false;
+  if (state.transform) { cancelTransform(); return false; }
+  return true;
+}
+export function doUndo() { if (readyForHistory() && state.doc.undo()) { state.view.request(); state.maybeAutosave?.(); } }
+export function doRedo() { if (readyForHistory() && state.doc.redo()) { state.view.request(); state.maybeAutosave?.(); } }
 
 export function mergeDown() {
   const doc = state.doc;
   const l = doc?.active;
   const below = l ? doc._layerBelow(l) : null;
-  if (!l || !below) return toast('No layer below');
-  doc.pushUndo(below);
-  const tmp = makeCanvas(doc.width, doc.height);
-  const g = ctx2d(tmp);
-  g.drawImage(below.canvas, 0, 0);
-  g.globalAlpha = l.opacity;
-  g.globalCompositeOperation = l.blend === 'add' ? 'lighter' : l.blend;
-  g.drawImage(l.canvas, 0, 0);
-  ctx2d(below.canvas).clearRect(0, 0, doc.width, doc.height);
-  ctx2d(below.canvas).drawImage(tmp, 0, 0);
-  doc.removeLayer(l);
+  if (!l || !below || l.children) return toast('No layer below');
+  if (!doc.canAllocate(1)) return toast('Not enough canvas memory to merge');
+  // Merge = what you see: render just the two layers (masks, clipping and every blend mode
+  // included) and keep the result as the lower layer. One undo step restores both.
+  doc.batch(() => {
+    doc.pushUndo(below);
+    const tmp = makeCanvas(doc.width, doc.height);
+    const saved = { layers: doc.layers, bgAlpha: doc.bgAlpha };
+    const belowState = { opacity: below.opacity, blend: below.blend, clipping: below.clipping, mask: below.mask };
+    // Render below (as a plain normal layer) then the active layer on top, with no background.
+    below.opacity = 1; below.blend = 'normal'; below.clipping = false;
+    doc.layers = [below, l];
+    doc.bgAlpha = 0;
+    doc.render(tmp, null);
+    doc.layers = saved.layers; doc.bgAlpha = saved.bgAlpha;
+    Object.assign(below, belowState);
+    if (below.mask) {
+      // The lower layer's mask was baked into the render; drop it from the merged layer.
+      doc.pushStructureUndo();
+      below.mask = null;
+    }
+    const bg = ctx2d(below.canvas);
+    bg.clearRect(0, 0, doc.width, doc.height);
+    bg.drawImage(tmp, 0, 0);
+    releaseCanvas(tmp);
+    doc.removeLayer(l);
+  });
+  doc.activeId = below.id;
+  renderLayers();
   state.view.request();
+  state.maybeAutosave?.();
 }
 
 export function renderLayers() {
@@ -191,15 +246,17 @@ export function renderLayers() {
   for (const layer of doc.layerFlatList()) {
     const item = el('div', { class: 'layer-item' + (layer.id === doc.activeId ? ' on' : '') });
     const thumb = el('img', { alt: '' });
-    thumb.src = layer.thumb(40).toDataURL();
+    const tc = layer.thumb(40);
+    thumb.src = tc.toDataURL();
+    releaseCanvas(tc);
     let depth = 0, p = layer.group;
     while (p) { depth++; p = p.group; }
     const name = el('span', { class: 'lname' }, `${layer.children ? '▸ ' : ''}${layer.name}`);
     if (depth) name.style.paddingLeft = `${depth * 10}px`;
     const vis = el('button', { class: 'mini' + (layer.visible ? ' on' : ''), title: 'Visible' }, '◉');
-    vis.onclick = (e) => { e.stopPropagation(); layer.visible = !layer.visible; renderLayers(); state.view.request(); };
+    vis.onclick = (e) => { e.stopPropagation(); layer.visible = !layer.visible; renderLayers(); state.view.request(); state.maybeAutosave?.(); };
     const lock = el('button', { class: 'mini' + (layer.alphaLock ? ' on' : ''), title: 'Alpha lock' }, '⌾');
-    lock.onclick = (e) => { e.stopPropagation(); layer.alphaLock = !layer.alphaLock; renderLayers(); };
+    lock.onclick = (e) => { e.stopPropagation(); layer.alphaLock = !layer.alphaLock; renderLayers(); state.maybeAutosave?.(); };
     const mask = el('button', { class: 'mini' + (layer.mask ? ' on' : ''), title: 'Mask' }, '◐');
     mask.onclick = (e) => { e.stopPropagation(); doc.activeId = layer.id; toggleMask(); };
     item.append(thumb, name, vis, lock, mask);
@@ -247,7 +304,7 @@ export function renderSelectionPanel() {
 
 export function fillSelection() {
   const doc = state.doc;
-  const l = doc?.active;
+  const l = doc?.paintable;
   if (!l || !state.sel.active) return;
   doc.pushUndo(l);
   const tmp = makeCanvas(doc.width, doc.height);
@@ -256,20 +313,27 @@ export function fillSelection() {
   g.fillRect(0, 0, doc.width, doc.height);
   state.sel.applyToCanvas(tmp);
   const lg = ctx2d(l.canvas);
+  lg.save();
   lg.globalAlpha = state.alpha;
+  if (l.alphaLock) lg.globalCompositeOperation = 'source-atop';
   lg.drawImage(tmp, 0, 0);
-  lg.globalAlpha = 1;
-  state.refreshView?.();
+  lg.restore();
+  releaseCanvas(tmp);
+  doc.emit('strokeEnd', { layer: l });
 }
 
 function layerFromSelection() {
   const doc = state.doc;
-  if (!doc || !state.sel.active) return;
-  const src = makeCanvas(doc.width, doc.height);
-  ctx2d(src).drawImage(doc.active.canvas, 0, 0);
-  state.sel.applyToCanvas(src);
+  const from = doc?.paintable;
+  if (!from || !state.sel.active) return;
+  // Copy & paste: the selected pixels go onto a new layer, the original stays put.
   const l = doc.addLayer({ name: 'Selection' });
-  ctx2d(l.canvas).drawImage(src, 0, 0);
+  if (!l) return;
+  const lg = ctx2d(l.canvas);
+  lg.drawImage(from.canvas, 0, 0);
+  state.sel.applyToCanvas(l.canvas);
   state.sel.clear();
+  renderLayers();
   state.view.request();
+  state.maybeAutosave?.();
 }

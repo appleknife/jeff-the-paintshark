@@ -1,4 +1,7 @@
-import { makeCanvas, ctx2d, clamp, rgbToHsv, hsvToRgb } from './util.js';
+import { makeCanvas, ctx2d, clamp, rgbToHsv, hsvToRgb, drawBlurred, releaseCanvas } from './util.js';
+
+// Channel values live in Uint8ClampedArrays, which clamp to 0–255 by themselves.
+// (clamp() defaults to 0–1, which turned every pixel black in several filters.)
 
 export const ADJUSTMENTS = [
   { id: 'hsb', name: 'Hue, Saturation, Brightness', color: true },
@@ -58,7 +61,7 @@ const lutFrom = (points) => {
   return lut;
 };
 
-export function applyAdjustment(doc, layer, kind, params) {
+export function applyAdjustment(doc, layer, kind, params, selection = null) {
   const w = doc.width, h = doc.height;
   const canvas = layer.canvas;
   const g = ctx2d(canvas);
@@ -95,9 +98,9 @@ export function applyAdjustment(doc, layer, kind, params) {
           const l = (d[i] + d[i + 1] + d[i + 2]) / 765;
           const wsh = Math.pow(1 - l, 2), whi = Math.pow(l, 2), wmid = 1 - wsh - whi;
           const amt = (sh * wsh + mid * wmid + hi * whi) * 90;
-          d[i] = clamp(d[i] + amt * 0.65);
-          d[i + 1] = clamp(d[i + 1] + amt * 0.15);
-          d[i + 2] = clamp(d[i + 2] - amt * 0.55);
+          d[i] = d[i] + amt * 0.65;
+          d[i + 1] = d[i + 1] + amt * 0.15;
+          d[i + 2] = d[i + 2] - amt * 0.55;
         }
       });
       break;
@@ -123,22 +126,20 @@ export function applyAdjustment(doc, layer, kind, params) {
       break;
     }
     case 'blur': {
+      // Safari has no ctx.filter, so drawBlurred falls back to a software blur.
       g.clearRect(0, 0, w, h);
-      g.filter = `blur(${params.radius}px)`;
-      g.drawImage(source, 0, 0);
-      g.filter = 'none';
+      drawBlurred(canvas, source, params.radius);
       break;
     }
     case 'sharpen': {
       const blurred = makeCanvas(w, h);
       const bg = ctx2d(blurred);
-      bg.filter = 'blur(2px)';
-      bg.drawImage(source, 0, 0);
-      bg.filter = 'none';
+      drawBlurred(blurred, source, 2);
       const a = g.getImageData(0, 0, w, h);
       const b = bg.getImageData(0, 0, w, h);
+      releaseCanvas(blurred);
       for (let i = 0; i < a.data.length; i += 4) {
-        for (let c = 0; c < 3; c++) a.data[i + c] = clamp(a.data[i + c] + (a.data[i + c] - b.data[i + c]) * params.amount * 2.4);
+        for (let c = 0; c < 3; c++) a.data[i + c] = a.data[i + c] + (a.data[i + c] - b.data[i + c]) * params.amount * 2.4;
       }
       g.putImageData(a, 0, 0);
       break;
@@ -148,36 +149,39 @@ export function applyAdjustment(doc, layer, kind, params) {
         for (let i = 0; i < d.length; i += 4) {
           if (!d[i + 3]) continue;
           if (params.color) {
-            d[i] = clamp(d[i] + (Math.random() - 0.5) * 255 * params.amount);
-            d[i + 1] = clamp(d[i + 1] + (Math.random() - 0.5) * 255 * params.amount);
-            d[i + 2] = clamp(d[i + 2] + (Math.random() - 0.5) * 255 * params.amount);
+            d[i] = d[i] + (Math.random() - 0.5) * 255 * params.amount;
+            d[i + 1] = d[i + 1] + (Math.random() - 0.5) * 255 * params.amount;
+            d[i + 2] = d[i + 2] + (Math.random() - 0.5) * 255 * params.amount;
           } else {
             const n = (Math.random() - 0.5) * 255 * params.amount;
-            d[i] = clamp(d[i] + n); d[i + 1] = clamp(d[i + 1] + n); d[i + 2] = clamp(d[i + 2] + n);
+            d[i] = d[i] + n; d[i + 1] = d[i + 1] + n; d[i + 2] = d[i + 2] + n;
           }
         }
       });
       break;
     }
     case 'halftone': {
+      // Dots on a rotated grid; each samples the pixel under its own centre.
       const size = Math.max(2, params.size);
-      const out = makeCanvas(w, h);
-      ctx2d(out).drawImage(source, 0, 0);
-      g.fillStyle = '#fff';
-      g.fillRect(0, 0, w, h);
+      const data = ctx2d(source).getImageData(0, 0, w, h).data;
+      g.clearRect(0, 0, w, h);
       const rad = (params.angle * Math.PI) / 180;
+      const cos = Math.cos(rad), sin = Math.sin(rad);
+      const reach = Math.hypot(w, h) / 2 + size;
       g.save();
       g.translate(w / 2, h / 2);
       g.rotate(rad);
-      const data = ctx2d(source).getImageData(0, 0, w, h).data;
-      for (let y = -h; y < h; y += size) {
-        for (let x = -w; x < w; x += size) {
-          const ix = clamp(Math.round(x + w / 2)), iy = clamp(Math.round(y + h / 2));
+      for (let y = -reach; y < reach; y += size) {
+        for (let x = -reach; x < reach; x += size) {
+          const ix = Math.round(w / 2 + x * cos - y * sin), iy = Math.round(h / 2 + x * sin + y * cos);
+          if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
           const o = (iy * w + ix) * 4;
+          if (data[o + 3] < 8) continue;
           const l = 1 - (data[o] * 0.3 + data[o + 1] * 0.59 + data[o + 2] * 0.11) / 255;
-          g.fillStyle = `rgb(${data[o]},${data[o + 1]},${data[o + 2]})`;
+          const r = (size / 2) * Math.sqrt(Math.max(0.08, l)) * 1.15;
+          g.fillStyle = `rgba(${data[o]},${data[o + 1]},${data[o + 2]},${data[o + 3] / 255})`;
           g.beginPath();
-          g.arc(x, y, (size / 2) * l, 0, Math.PI * 2);
+          g.arc(x, y, r, 0, Math.PI * 2);
           g.fill();
         }
       }
@@ -211,6 +215,7 @@ export function applyAdjustment(doc, layer, kind, params) {
       const og = ctx2d(out);
       og.globalCompositeOperation = 'lighter';
       og.fillStyle = 'rgba(0,0,0,1)';
+      releaseCanvas(out);
       const rC = makeCanvas(w, h), bC = makeCanvas(w, h);
       ctx2d(rC).drawImage(source, a, 0);
       ctx2d(bC).drawImage(source, -a, 0);
@@ -226,6 +231,7 @@ export function applyAdjustment(doc, layer, kind, params) {
         outImg.data[i + 3] = gd[i + 3];
       }
       g.putImageData(outImg, 0, 0);
+      releaseCanvas(rC); releaseCanvas(bC);
       break;
     }
     case 'glow': {
@@ -238,15 +244,17 @@ export function applyAdjustment(doc, layer, kind, params) {
         img.data[i + 3] = keep ? 255 : 0;
       }
       bg.putImageData(img, 0, 0);
+      const halo = makeCanvas(w, h);
       g.globalCompositeOperation = 'screen';
       g.globalAlpha = params.strength;
       for (let i = 1; i <= 3; i++) {
-        g.filter = `blur(${params.radius * i * 0.4}px)`;
-        g.drawImage(bright, 0, 0);
+        ctx2d(halo).clearRect(0, 0, w, h);
+        drawBlurred(halo, bright, params.radius * i * 0.4);
+        g.drawImage(halo, 0, 0);
       }
-      g.filter = 'none';
       g.globalAlpha = 1;
       g.globalCompositeOperation = 'source-over';
+      releaseCanvas(halo); releaseCanvas(bright);
       break;
     }
     case 'motion-blur': {
@@ -263,29 +271,28 @@ export function applyAdjustment(doc, layer, kind, params) {
       break;
     }
     case 'perspective-blur': {
-      const vertical = makeCanvas(w, h);
-      const vg = ctx2d(vertical);
-      vg.filter = `blur(${params.radius * 0.5}px)`;
-      vg.drawImage(source, 0, 0);
-      vg.filter = 'none';
-      const sharp = makeCanvas(w, h);
-      ctx2d(sharp).drawImage(source, 0, 0);
-      g.clearRect(0, 0, w, h);
-      g.drawImage(vertical, 0, 0);
-      g.save();
-      const fy = params.focus * h;
-      const grad = g.createLinearGradient(0, 0, 0, h);
+      // Sharp in the focus band, blurred towards the top and bottom (tilt-shift).
+      const blurred = makeCanvas(w, h);
+      drawBlurred(blurred, source, params.radius * 0.5);
+      const fade = makeCanvas(w, h);
+      const fg = ctx2d(fade);
+      fg.drawImage(source, 0, 0);
+      const grad = fg.createLinearGradient(0, 0, 0, h);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
-      grad.addColorStop(clamp(params.focus - 0.18), 'rgba(0,0,0,0.85)');
-      grad.addColorStop(clamp(params.focus + 0.18), 'rgba(0,0,0,0.85)');
+      grad.addColorStop(clamp(params.focus - 0.18), 'rgba(0,0,0,1)');
+      grad.addColorStop(clamp(params.focus + 0.18), 'rgba(0,0,0,1)');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
-      g.globalCompositeOperation = 'destination-in';
-      g.fillStyle = grad;
-      g.fillRect(0, 0, w, h);
-      g.restore();
-      g.globalCompositeOperation = 'destination-over';
-      g.drawImage(sharp, 0, 0);
+      fg.globalCompositeOperation = 'destination-in';
+      fg.fillStyle = grad;
+      fg.fillRect(0, 0, w, h);
+      g.clearRect(0, 0, w, h);
+      g.drawImage(blurred, 0, 0);
+      // Mask the blurred copy out where the sharp band is fully opaque, then lay the band on top.
+      g.globalCompositeOperation = 'destination-out';
+      g.drawImage(fade, 0, 0);
       g.globalCompositeOperation = 'source-over';
+      g.drawImage(fade, 0, 0);
+      releaseCanvas(blurred); releaseCanvas(fade);
       break;
     }
     case 'gradient': {
@@ -304,5 +311,21 @@ export function applyAdjustment(doc, layer, kind, params) {
     }
     default: break;
   }
+  if (selection) {
+    // Only the selected area changes: put the untouched pixels back outside it.
+    const keep = makeCanvas(w, h);
+    const kg = ctx2d(keep);
+    kg.drawImage(source, 0, 0);
+    kg.globalCompositeOperation = 'destination-out';
+    kg.drawImage(selection.canvas, 0, 0);
+    g.save();
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(selection.canvas, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    g.drawImage(keep, 0, 0);
+    g.restore();
+    releaseCanvas(keep);
+  }
+  releaseCanvas(source);
   doc.emit('strokeEnd', { layer });
 }

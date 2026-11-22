@@ -16,7 +16,7 @@ export class Viewport {
     this.hud = null;
     this.hudSize = 0;
     this.activeStroke = null;
-    this.transform = null;
+    this.selPreview = null;
     this.showAnts = true;
     this._raf = null;
     this._checker = null;
@@ -30,6 +30,7 @@ export class Viewport {
 
   resize() {
     const r = this.stage.getBoundingClientRect();
+    const wasHidden = !(this.w > 1 && this.h > 1);
     this.w = Math.max(1, r.width);
     this.h = Math.max(1, r.height);
     for (const c of [this.canvas, this.overlay]) {
@@ -39,6 +40,8 @@ export class Viewport {
     this.ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     this.octx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
     this._checker = null;
+    // Coming back from the gallery the studio was hidden (0×0); fit once it has a real size.
+    if (wasHidden && this.doc && this.w > 1 && this.h > 1) this.fit();
     this.request();
   }
 
@@ -57,7 +60,10 @@ export class Viewport {
 
   setDoc(doc) {
     this.doc = doc;
-    this._comp = makeCanvas(doc.width, doc.height);
+    this.activeStroke = null;
+    this.selPreview = null;
+    this.hud = null;
+    this.resize(); // the stage may have just been un-hidden; measure it now, not later
     this.fit();
   }
 
@@ -111,27 +117,65 @@ export class Viewport {
       g.fillRect(0, 0, d.width, d.height);
       g.globalAlpha = 1;
     }
-    const comp = this._comp || (this._comp = makeCanvas(d.width, d.height));
-    d.render(comp, this.activeStroke);
-    if (this.transform) this.transform.render(comp);
+    // The document reuses one composite buffer (saves a full-size canvas on iPad).
+    const comp = d.renderView(this.activeStroke && this.activeStroke.enabled ? this.activeStroke : null);
     g.imageSmoothingQuality = 'high';
     g.drawImage(comp, 0, 0);
-    if (this.showAnts && d.selection && d.selection.active) g.drawImage(d.selection.antsCanvas(), 0, 0);
+    if (this.showAnts && d.selection && d.selection.active) {
+      const ants = d.selection.antsPath();
+      g.lineWidth = 1.5 / this.zoom;
+      g.strokeStyle = 'rgba(0,0,0,.8)';
+      g.stroke(ants);
+      g.setLineDash([5 / this.zoom, 5 / this.zoom]);
+      g.strokeStyle = 'rgba(255,255,255,.95)';
+      g.stroke(ants);
+      g.setLineDash([]);
+    }
     g.restore();
 
     d.zoom = this.zoom;
-    this._drawGuides();
 
     g.strokeStyle = 'rgba(255,255,255,.18)';
     g.lineWidth = 1;
     g.strokeRect(this.panX - 0.5, this.panY - 0.5, w + 1, h + 1);
 
+    // Overlay: clear once, then guides, selection-in-progress and brush cursor.
+    // (The cursor used to clear the overlay right after the guides were drawn, so guides never showed.)
+    this.octx.clearRect(0, 0, this.w, this.h);
+    this._drawGuides();
+    this._drawSelPreview();
     this._drawHud();
+  }
+
+  _drawSelPreview() {
+    const sp = this.selPreview;
+    if (!sp || !sp.points.length) return;
+    const o = this.octx;
+    const pts = sp.points.map((p) => this.toScreen(p.x, p.y));
+    o.save();
+    o.beginPath();
+    if (sp.mode === 'rect' || sp.mode === 'ellipse') {
+      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+      const x0 = Math.min(...xs), y0 = Math.min(...ys), x1 = Math.max(...xs), y1 = Math.max(...ys);
+      if (sp.mode === 'rect') o.rect(x0, y0, x1 - x0, y1 - y0);
+      else o.ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, 0, 0, Math.PI * 2);
+    } else {
+      o.moveTo(pts[0].x, pts[0].y);
+      for (const p of pts.slice(1)) o.lineTo(p.x, p.y);
+    }
+    o.fillStyle = 'rgba(61,139,253,.12)';
+    o.fill();
+    o.lineWidth = 1.5;
+    o.strokeStyle = 'rgba(0,0,0,.7)';
+    o.stroke();
+    o.setLineDash([5, 5]);
+    o.strokeStyle = '#fff';
+    o.stroke();
+    o.restore();
   }
 
   _drawHud() {
     const o = this.octx;
-    o.clearRect(0, 0, this.w, this.h);
     if (!this.hud || !this.hudSize) return;
     const p = this.toScreen(this.hud.x, this.hud.y);
     const r = Math.max(2, (this.hudSize * this.zoom) / 2);
@@ -179,8 +223,8 @@ export class Viewport {
       o.moveTo(g0.x, vy); o.lineTo(g1.x, vy);
     }
     if (d.guide.type === 'symmetry') {
-      if (d.symmetry.includes('x')) { const m = (g0.x + g1.x) / 2; o.moveTo(m, g0.y); o.lineTo(m, g1.y); }
-      if (d.symmetry.includes('y')) { const m = (g0.y + g1.y) / 2; o.moveTo(g0.x, m); o.lineTo(g1.x, m); }
+      if (d.symmetry === 'x' || d.symmetry === 'quad') { const m = (g0.x + g1.x) / 2; o.moveTo(m, g0.y); o.lineTo(m, g1.y); }
+      if (d.symmetry === 'y' || d.symmetry === 'quad') { const m = (g0.y + g1.y) / 2; o.moveTo(g0.x, m); o.lineTo(g1.x, m); }
       if (d.symmetry === 'radial' || d.symmetry === 'rotational') {
         const cx = (g0.x + g1.x) / 2, cy = (g0.y + g1.y) / 2, r = Math.hypot(g1.x - g0.x, g1.y - g0.y);
         for (let i = 0; i < 6; i++) {

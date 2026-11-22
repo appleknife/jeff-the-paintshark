@@ -1,16 +1,33 @@
-import { makeCanvas, ctx2d, clamp, lerp } from './util.js';
+import { makeCanvas, ctx2d, clamp, lerp, releaseCanvas } from './util.js';
 
+/**
+ * Free transform / warp of the selected pixels (or the whole layer).
+ * On start the moving pixels are lifted out of the layer into `src`; the document renders
+ * the session live on top of the remaining pixels (doc.liveTransform). commit() stamps the
+ * result back, cancel() restores the untouched original.
+ */
 export class TransformSession {
   constructor(doc, layer, selection) {
     this.doc = doc;
     this.layer = layer;
     this.selection = selection && selection.active ? selection : null;
+    const lg = ctx2d(layer.canvas);
+    this.orig = lg.getImageData(0, 0, doc.width, doc.height);
     this.src = makeCanvas(doc.width, doc.height);
     const g = ctx2d(this.src);
     g.drawImage(layer.canvas, 0, 0);
     if (this.selection) this.selection.applyToCanvas(this.src);
-    this.bounds = this.selection ? this.selection.bounds() : { x: 0, y: 0, w: doc.width, h: doc.height };
-    if (!this.bounds) this.bounds = { x: 0, y: 0, w: doc.width, h: doc.height };
+    // Lift the moving pixels out of the layer.
+    lg.save();
+    if (this.selection) {
+      lg.globalCompositeOperation = 'destination-out';
+      lg.drawImage(this.selection.canvas, 0, 0);
+    } else {
+      lg.clearRect(0, 0, doc.width, doc.height);
+    }
+    lg.restore();
+    this.bounds = (this.selection && this.selection.bounds()) || { x: 0, y: 0, w: doc.width, h: doc.height };
+    this.done = false;
     this.tx = 0; this.ty = 0; this.scaleX = 1; this.scaleY = 1; this.rotate = 0;
     this.warp = null;
     this.grid = 8;
@@ -56,6 +73,8 @@ export class TransformSession {
 
   dragWarp(px, py, dx, dy, radius = 220) {
     this.ensureWarp();
+    // Warp points live in the untranslated space.
+    px -= this.tx; py -= this.ty;
     for (const row of this.warp) for (const p of row) {
       const d = Math.hypot(p.sx + p.ox - px, p.sy + p.oy - py);
       if (d > radius) continue;
@@ -83,8 +102,10 @@ export class TransformSession {
     };
   }
 
-  render(target) {
+  render(target, src = this.src) {
     const g = ctx2d(target);
+    const prevSrc = this.src;
+    this.src = src;
     const c = this.center;
     g.save();
     g.translate(c.x + this.tx, c.y + this.ty);
@@ -115,10 +136,26 @@ export class TransformSession {
         this.bounds.x, this.bounds.y, this.bounds.w, this.bounds.h);
     }
     g.restore();
+    this.src = prevSrc;
   }
 
+  get changed() {
+    return this.tx !== 0 || this.ty !== 0 || this.scaleX !== 1 || this.scaleY !== 1 || this.rotate !== 0
+      || (this.warp && this.warp.some((row) => row.some((p) => p.ox || p.oy)));
+  }
+
+  /** Draw the source triangle (u,v) onto the destination triangle (p) with an affine map. */
   _tri(g, p0, p1, p2, u0, v0, u1, v1, u2, v2) {
-    const src = this.src;
+    const d1x = u1 - u0, d1y = v1 - v0, d2x = u2 - u0, d2y = v2 - v0;
+    const det = d1x * d2y - d2x * d1y;
+    if (Math.abs(det) < 1e-9) return;
+    const q1x = p1.x - p0.x, q1y = p1.y - p0.y, q2x = p2.x - p0.x, q2y = p2.y - p0.y;
+    const a = (q1x * d2y - q2x * d1y) / det;
+    const c = (q2x * d1x - q1x * d2x) / det;
+    const b = (q1y * d2y - q2y * d1y) / det;
+    const d = (q2y * d1x - q1y * d2x) / det;
+    const e = p0.x - a * u0 - c * v0;
+    const f = p0.y - b * u0 - d * v0;
     g.save();
     g.beginPath();
     g.moveTo(p0.x, p0.y);
@@ -126,55 +163,53 @@ export class TransformSession {
     g.lineTo(p2.x, p2.y);
     g.closePath();
     g.clip();
-    const x0 = Math.min(u0, u1, u2), y0 = Math.min(v0, v1, v2);
-    const x1 = Math.max(u0, u1, u2), y1 = Math.max(v0, v1, v2);
-    const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
-    const m = new DOMMatrix();
-    m.a = (u1 - u0) / w; m.b = (v1 - v0) / w;
-    m.c = (u2 - u0) / h; m.d = (v2 - v0) / h;
-    m.e = u0 - (x0 / w) * (u1 - u0) - (y0 / h) * (u2 - u0);
-    m.f = v0 - (x0 / w) * (v1 - v0) - (y0 / h) * (v2 - v0);
-    g.setTransform(m);
-    g.drawImage(src, x0, y0, w, h, x0, y0, w, h);
+    g.transform(a, b, c, d, e, f);
+    const W = this.src.width, H = this.src.height;
+    const x0 = clamp(Math.floor(Math.min(u0, u1, u2)) - 1, 0, W), y0 = clamp(Math.floor(Math.min(v0, v1, v2)) - 1, 0, H);
+    const x1 = clamp(Math.ceil(Math.max(u0, u1, u2)) + 1, 0, W), y1 = clamp(Math.ceil(Math.max(v0, v1, v2)) + 1, 0, H);
+    if (x1 > x0 && y1 > y0) g.drawImage(this.src, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
     g.restore();
   }
 
   commit() {
-    const tmp = makeCanvas(this.doc.width, this.doc.height);
-    this.render(tmp);
+    if (this.done) return;
+    this.done = true;
+    if (!this.changed) { this.cancel(true); return; }
+    const W = this.doc.width, H = this.doc.height;
+    this.doc.pushUndoData(this.layer, this.orig);
     const g = ctx2d(this.layer.canvas);
     g.save();
-    if (this.selection) {
-      const erase = makeCanvas(this.doc.width, this.doc.height);
-      ctx2d(erase).drawImage(this.layer.canvas, 0, 0);
-      ctx2d(erase).globalCompositeOperation = 'destination-out';
-      ctx2d(erase).drawImage(this.selection.canvas, 0, 0);
-      g.clearRect(0, 0, this.doc.width, this.doc.height);
-      g.drawImage(erase, 0, 0);
-    } else {
-      g.clearRect(0, 0, this.doc.width, this.doc.height);
-    }
-    if (this.selection) {
-      const masked = makeCanvas(this.doc.width, this.doc.height);
-      ctx2d(masked).drawImage(tmp, 0, 0);
-      this.selection.applyToCanvas(masked);
-      g.drawImage(masked, 0, 0);
-    } else {
-      g.drawImage(tmp, 0, 0);
-    }
-    if (this.layer.alphaLock) {
-      const base = makeCanvas(this.doc.width, this.doc.height);
-      const bg = ctx2d(base);
-      bg.drawImage(this.layer.canvas, 0, 0);
-    }
+    if (this.layer.alphaLock) g.globalCompositeOperation = 'source-atop';
+    this.render(this.layer.canvas);
     g.restore();
+    if (this.selection) {
+      // Move the selection along with the pixels.
+      const moved = makeCanvas(W, H);
+      this.render(moved, this.selection.canvas);
+      this.selection.setMask(moved);
+      releaseCanvas(moved);
+    }
+    this._free();
     this.doc.emit('strokeEnd', { layer: this.layer });
+  }
+
+  cancel(silent = false) {
+    this.done = true;
+    if (this.orig) ctx2d(this.layer.canvas).putImageData(this.orig, 0, 0);
+    this._free();
+    if (!silent) this.doc.emit('layers');
+  }
+
+  _free() {
+    releaseCanvas(this.src);
+    this.orig = null;
   }
 }
 
 export const LIQUIFY_MODES = ['push', 'twirl-left', 'twirl-right', 'pinch', 'bloat', 'crystals', 'edges'];
 
-export function liquify(layer, x, y, radius, amount, mode) {
+/** Distort `layer` around (x, y). For push, (mx, my) is how far the finger moved. */
+export function liquify(layer, x, y, radius, amount, mode, mx = 0, my = 0) {
   const w = layer.canvas.width, h = layer.canvas.height;
   const x0 = clamp(Math.floor(x - radius), 0, w - 1);
   const y0 = clamp(Math.floor(y - radius), 0, h - 1);
@@ -194,7 +229,10 @@ export function liquify(layer, x, y, radius, amount, mode) {
       if (d > radius) continue;
       const f = 1 - d / radius;
       let sx = gx, sy = gy;
-      if (mode === 'push') { sx = gx - amount * f * 8; sy = gy - amount * f * 8; }
+      if (mode === 'push') {
+        const k = f * clamp(amount * 2, 0.05, 1);
+        sx = gx - mx * k; sy = gy - my * k;
+      }
       else if (mode === 'twirl-left' || mode === 'twirl-right') {
         const a = (mode === 'twirl-left' ? -1 : 1) * amount * f * 0.35;
         const ca = Math.cos(a), sa = Math.sin(a);

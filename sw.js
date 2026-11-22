@@ -1,4 +1,4 @@
-const CACHE = 'paintshark-v3';
+const CACHE = 'paintshark-v4';
 const ASSETS = [
   '.', 'index.html', 'css/app.css',
   'js/main.js', 'js/appstate.js', 'js/util.js', 'js/brush.js', 'js/doc.js', 'js/zip.js',
@@ -24,15 +24,22 @@ self.addEventListener('fetch', (e) => {
 
   e.respondWith((async () => {
     try {
-      const fresh = await fetch(e.request, { cache: 'no-cache' });
+      // Network first, but don't hang on a bad connection: fall back to the cache after 4 s.
+      const fresh = await Promise.race([
+        fetch(e.request, { cache: 'no-cache' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+      ]);
       if (fresh.ok) {
         const copy = fresh.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
       }
       return fresh;
     } catch {
-      const hit = await caches.match(e.request);
-      return hit || caches.match('index.html');
+      const hit = await caches.match(e.request, { ignoreSearch: true });
+      if (hit) return hit;
+      // Only page navigations fall back to the app shell; a missing script must not get HTML.
+      if (e.request.mode === 'navigate') return (await caches.match('index.html')) || Response.error();
+      return Response.error();
     }
   })());
 });

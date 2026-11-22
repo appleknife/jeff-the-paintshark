@@ -3,7 +3,7 @@ import { BLEND_MODES, clearTipCache } from './brush.js';
 import { state } from './appstate.js';
 
 const STUDIO_GROUPS = [
-  ['Shape', [['shape', 'select', ['soft', 'hard', 'square', 'speckle']], ['shapeRoundness', 'range', 0.05, 1, 0.01],
+  ['Shape', [['shape', 'select', ['soft', 'hard', 'square', 'speckle']], ['hardness', 'range', 0.01, 0.94, 0.01], ['shapeRoundness', 'range', 0.05, 1, 0.01],
     ['shapeAngle', 'range', 0, 6.28, 0.01], ['shapeScatter', 'range', 0, 1, 0.01], ['shapeCount', 'range', 1, 8, 1]]],
   ['Grain', [['grain', 'select', ['none', 'paper', 'canvas', 'noise', 'spray']], ['grainDepth', 'range', 0, 1, 0.01],
     ['grainScale', 'range', 0.05, 1, 0.01]]],
@@ -14,7 +14,7 @@ const STUDIO_GROUPS = [
   ['Stabilization', [['streamline', 'range', 0, 0.95, 0.01], ['motionFilter', 'range', 0, 0.95, 0.01],
     ['pressureResponse', 'range', 0, 1, 0.01]]],
   ['Wet paint', [['wetMix', 'range', 0, 1, 0.01], ['wetEdges', 'range', 0, 1, 0.01],
-    ['glaze', 'range', 0, 1, 0.01], ['burntEdges', 'range', 0, 1, 0.01]]],
+    ['glaze', 'range', 0, 1, 0.01]]],
   ['Stamp', [['jitter', 'range', 0, 1, 0.01], ['angleJitter', 'range', 0, 1, 0.01], ['stamp', 'check']]],
 ];
 
@@ -33,7 +33,7 @@ export function buildStudio() {
   for (const [title, rows] of STUDIO_GROUPS) {
     const box = el('div', { class: 'rows' });
     for (const [path, kind, a, b, step] of rows) {
-      const value = getPath(state.brush, path);
+      const value = getPath(state.brush, path) ?? (kind === 'range' ? a : kind === 'check' ? false : a[0]);
       let input;
       if (kind === 'range') {
         input = el('input', { type: 'range', min: a, max: b, step, value });
@@ -42,6 +42,7 @@ export function buildStudio() {
           setPath(state.brush, path, +input.value);
           out.textContent = (+input.value).toFixed(2);
           clearTipCache();
+          state.syncBrushSliders?.();
         };
         box.append(el('label', {}, el('span', {}, path.split('.').pop().replace(/([A-Z])/g, ' $1').toLowerCase()), input, out));
         continue;

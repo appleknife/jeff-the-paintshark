@@ -14,10 +14,13 @@ export function setupColor() {
     wheel.width = s; wheel.height = s;
     const g = ctx2d(wheel);
     const r = s / 2;
+    g.clearRect(0, 0, s, s);
+    // Hue 0 sits at 12 o'clock, matching the picker math below (angle + 90°).
     for (let a = 0; a < 360; a += 2) {
+      const start = ((a - 90) * Math.PI) / 180;
       g.beginPath();
       g.moveTo(r, r);
-      g.arc(r, r, r - 2, (a * Math.PI) / 180, ((a + 2.6 * Math.PI) / 180));
+      g.arc(r, r, r - 2, start, start + (2.6 * Math.PI) / 180);
       g.closePath();
       g.fillStyle = `hsl(${a} 100% 50%)`;
       g.fill();
@@ -136,29 +139,34 @@ function saveColors() {
   store.savePrefs(state.prefs);
 }
 
-export function selectBrush(p) {
-  state.brush = { ...p };
-  $('#sizeSlider').value = Math.round(state.brush.size * 1000);
-  $('#sizeVal').textContent = `${Math.round(state.brush.size * 1000)}%`;
+export function syncBrushSliders() {
+  const size = Math.round(state.brush.size * 1000);
+  $('#sizeSlider').value = size;
+  $('#sizeVal').textContent = String(size);
   $('#opacitySlider').value = Math.round(state.brush.opacity * 100);
   $('#opacityVal').textContent = `${Math.round(state.brush.opacity * 100)}%`;
+  const soft = state.brush.shape === 'hard' ? 100 : Math.round(clamp(state.brush.hardness ?? 0.55, 0.01, 0.94) * 100);
+  $('#softSlider').value = soft;
+  $('#softVal').textContent = `${soft}%`;
+}
+
+export function selectBrush(p) {
+  // Deep copy so Brush Studio tweaks don't silently edit the saved preset's nested settings.
+  state.brush = JSON.parse(JSON.stringify(p));
+  syncBrushSliders();
   state.brush.mode = state.tool === 'erase' ? 'erase' : state.tool === 'smudge' ? 'smudge' : 'paint';
   clearTipCache();
 }
 
 /* ---------- transform ---------- */
 
-let transformBase = null;
-
 export function startTransform() {
   const doc = state.doc;
-  const l = doc?.active;
-  if (!l) return;
+  const l = doc?.paintable;
+  if (!l) { toast('Pick a paint layer to transform'); return false; }
+  if (!doc.canAllocate(1)) { toast('Not enough canvas memory to transform'); return false; }
   state.transform = new TransformSession(doc, l, state.sel);
-  state.view.transform = state.transform;
-  transformBase = makeCanvas(doc.width, doc.height);
-  ctx2d(transformBase).drawImage(l.canvas, 0, 0);
-  if (state.sel.active) state.sel.applyToCanvas(transformBase);
+  doc.liveTransform = state.transform;
   const bar = el('div', { id: 'transformBar', class: 'layer-opts',
     style: 'position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:8;background:#17181d;border:1px solid #2b2e37;border-radius:10px;display:flex;gap:6px;padding:6px' });
   bar.append(
@@ -169,33 +177,35 @@ export function startTransform() {
       if (t) { t.tx = 0; t.ty = 0; t.scaleX = 1; t.scaleY = 1; t.rotate = 0; t.warp = null; }
       state.view.request();
     } }, 'Reset'),
-    el('button', { class: 'btn small', onclick: cancelTransform }, 'Cancel'));
+    el('button', { class: 'btn small', onclick: () => cancelTransform() }, 'Cancel'));
   $('#stageWrap').append(bar);
+  state.view.request();
+  return true;
+}
+
+function endTransform(t) {
+  $('#transformBar')?.remove();
+  state.transform = null;
+  state.transformDrag = null;
+  if (t.doc.liveTransform === t) t.doc.liveTransform = null;
 }
 
 export function commitTransform() {
   const t = state.transform;
   if (!t) return;
-  $('#transformBar')?.remove();
-  t.doc.pushUndo(t.layer);
-  const g = ctx2d(t.layer.canvas);
-  g.clearRect(0, 0, t.doc.width, t.doc.height);
-  g.drawImage(transformBase, 0, 0);
+  endTransform(t);
   t.commit();
-  state.transform = null;
-  state.view.transform = null;
+  state.view?.request();
   if (state.tool === 'transform') state.setTool?.('brush');
 }
 
-function cancelTransform() {
+export function cancelTransform() {
   const t = state.transform;
   if (!t) return;
-  const g = ctx2d(t.layer.canvas);
-  g.clearRect(0, 0, t.doc.width, t.doc.height);
-  g.drawImage(transformBase, 0, 0);
-  state.transform = null;
-  $('#transformBar')?.remove();
-  state.setTool?.('brush');
+  endTransform(t);
+  t.cancel();
+  state.view?.request();
+  if (state.tool === 'transform') state.setTool?.('brush');
 }
 
 /* ---------- text ---------- */
@@ -203,8 +213,8 @@ function cancelTransform() {
 export function placeText({ text, font, size }) {
   const doc = state.doc;
   if (!doc || !text.trim()) return;
-  doc.pushStructureUndo();
   const l = doc.addLayer({ name: 'Text', type: 'text', textData: { text, font, size, color: state.primary } });
+  if (!l) return;
   const g = ctx2d(l.canvas);
   const px = Math.max(8, size * (doc.width / 760));
   g.fillStyle = state.primary;
@@ -213,15 +223,20 @@ export function placeText({ text, font, size }) {
   g.textBaseline = 'top';
   const maxW = doc.width * 0.8;
   let line = '', y = doc.height * 0.25;
-  for (const word of text.split(/\s+/)) {
-    const test = line ? `${line} ${word}` : word;
-    if (g.measureText(test).width > maxW && line) {
-      g.fillText(line, doc.width * 0.1, y);
-      y += px * 1.3;
-      line = word;
-    } else line = test;
+  // Respect the line breaks typed in the box, then word-wrap each paragraph.
+  for (const para of text.split('\n')) {
+    line = '';
+    for (const word of para.split(/[ \t]+/).filter(Boolean)) {
+      const test = line ? `${line} ${word}` : word;
+      if (g.measureText(test).width > maxW && line) {
+        g.fillText(line, doc.width * 0.1, y);
+        y += px * 1.3;
+        line = word;
+      } else line = test;
+    }
+    if (line) g.fillText(line, doc.width * 0.1, y);
+    y += px * 1.3;
   }
-  if (line) g.fillText(line, doc.width * 0.1, y);
   g.globalAlpha = 1;
   state.setTool?.('brush');
   state.refreshView?.();

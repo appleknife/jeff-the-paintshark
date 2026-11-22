@@ -1,12 +1,12 @@
-import { $, el, makeCanvas, ctx2d, loadImage, uid, canvasToBlob, isIPad } from './util.js';
+import { $, el, makeCanvas, ctx2d, loadImage, uid, canvasToBlob, isIPad, fitArea, releaseCanvas } from './util.js';
 import { Doc, compositeThumb } from './doc.js';
 import { defaultPreset } from './brush.js';
 import { Selection } from './selection.js';
 import { Viewport } from './view.js';
 import { Timelapse } from './timelapse.js';
 import { readZip } from './zip.js';
-import { state, toast, sheet } from './appstate.js';
-import { setupStudio, renderLayers, closePanels } from './studio.js';
+import { state, toast, sheet, gestures } from './appstate.js';
+import { setupStudio, renderLayers, closePanels, setTool } from './studio.js';
 import { syncColorUI, selectBrush, commitTransform } from './studio2.js';
 import { setupInput, setupKeys } from './input.js';
 import { settingsSheet } from './sheets.js';
@@ -34,6 +34,10 @@ async function boot() {
   state.secondary = state.prefs.secondary || state.secondary;
   state.presets = store.loadPresets(seedPresets());
   state.brush = state.presets[0];
+  // Gesture choices made in Settings were saved but never read back.
+  if (state.prefs.gestures) {
+    for (const k of Object.keys(gestures)) if (state.prefs.gestures[k]) gestures[k] = state.prefs.gestures[k];
+  }
 
   $('#newArt').onclick = newCanvasSheet;
   $('#importArt').onclick = () => $('#importFile').click();
@@ -61,13 +65,21 @@ async function boot() {
     setTimeout(() => state.view?.resize(), 40);
   };
   if ('serviceWorker' in navigator) {
+    // A new version took over. Reload to use it, but never yank the page out from under an
+    // open canvas (that lost the last strokes): wait until the user is back in the gallery.
+    const hadController = !!navigator.serviceWorker.controller;
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!reloading) { reloading = true; location.reload(); }
+      if (!hadController || reloading) return;
+      if (state.doc) { state.reloadPending = true; return; }
+      reloading = true;
+      location.reload();
     });
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
   if (isIPad) document.documentElement.classList.add('ipad');
+  // Ask the browser not to evict the gallery under storage pressure.
+  navigator.storage?.persist?.().catch(() => {});
   state.saveDoc = saveDoc;
   state.refreshView = () => {
     if (!state.view) return;
@@ -82,14 +94,23 @@ async function boot() {
   state.leaveStudio = leaveStudio;
 }
 
+let galleryUrls = [];
+let galleryToken = 0;
+
 async function renderGallery() {
+  const token = ++galleryToken;
+  const docs = await store.listDocs();
+  if (token !== galleryToken) return; // a newer render started meanwhile
   const grid = $('#galleryGrid');
   grid.innerHTML = '';
-  const docs = await store.listDocs();
+  for (const u of galleryUrls) URL.revokeObjectURL(u);
+  galleryUrls = [];
   $('#galleryEmpty').classList.toggle('hidden', docs.length > 0);
   for (const d of docs) {
     const card = el('button', { class: 'card' });
-    const img = el('img', { alt: '', src: d.thumb ? URL.createObjectURL(d.thumb) : '' });
+    const src = d.thumb ? URL.createObjectURL(d.thumb) : '';
+    if (src) galleryUrls.push(src);
+    const img = el('img', { alt: '', src });
     card.append(img, el('div', { class: 'meta' },
       el('b', {}, d.name || 'Untitled'),
       el('span', {}, `${d.width}×${d.height} · ${new Date(d.updatedAt).toLocaleDateString()}`)));
@@ -131,8 +152,14 @@ function newCanvasSheet() {
         class: 'btn primary',
         onclick: async () => {
           close();
-          await createDoc(Math.min(8192, Math.max(64, +w.value)), Math.min(8192, Math.max(64, +h.value)),
-            { dpi: +dpi.value, bgColor: bg.value });
+          let cw = Math.min(8192, Math.max(64, Math.round(+w.value) || 2048));
+          let ch = Math.min(8192, Math.max(64, Math.round(+h.value) || 2048));
+          // Safari can't allocate a canvas over 16.7 megapixels (e.g. 8192×8192 just fails).
+          const [fw, fh] = fitArea(cw, ch);
+          if (fw !== cw || fh !== ch) toast(`Too big for Safari — using ${fw} × ${fh}`, 2600);
+          cw = fw; ch = fh;
+          const color = /^#[0-9a-f]{6}$/i.test(bg.value.trim()) ? bg.value.trim() : '#ffffff';
+          await createDoc(cw, ch, { dpi: +dpi.value || 132, bgColor: color });
         },
       }, 'Create')));
   });
@@ -154,20 +181,29 @@ async function openDocument(id) {
 
 async function importDocument(file) {
   try {
-    const doc = await loadDocFromZip(file, { name: file.name.replace(/\.paintshark$/, '') });
+    // A fresh id, so importing a copy never overwrites the artwork it was exported from.
+    const doc = await loadDocFromZip(file, { name: file.name.replace(/\.paintshark$/, ''), id: uid() });
     await openDoc(doc);
   } catch { toast('Not a PaintShark file'); }
 }
 
 async function importImage(file) {
   if (!file.type.startsWith('image/')) return;
-  const img = await loadImage(URL.createObjectURL(file));
-  const doc = new Doc({ width: img.naturalWidth, height: img.naturalHeight, name: file.name.replace(/\.[^.]+$/, ''), bgColor: '#ffffff', bgAlpha: 0 });
-  ctx2d(doc.active.canvas).drawImage(img, 0, 0);
+  const url = URL.createObjectURL(file);
+  let img;
+  try { img = await loadImage(url); } catch { toast(`Could not read ${file.name}`); return; } finally { URL.revokeObjectURL(url); }
+  let [w, h] = fitArea(img.naturalWidth, img.naturalHeight);
+  const k = Math.min(1, 8192 / Math.max(w, h));
+  w = Math.max(1, Math.floor(w * k)); h = Math.max(1, Math.floor(h * k));
+  const doc = new Doc({ width: w, height: h, name: file.name.replace(/\.[^.]+$/, ''), bgColor: '#ffffff', bgAlpha: 0 });
+  const g = ctx2d(doc.active.canvas);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, w, h);
   await openDoc(doc);
 }
 
 async function openDoc(doc) {
+  if (state.doc && state.doc !== doc) await closeCurrentDoc();
   state.doc = doc;
   state.sel = new Selection(doc);
   doc.selection = state.sel;
@@ -180,9 +216,19 @@ async function openDoc(doc) {
   renderLayers();
   selectBrush(state.presets[0]);
   syncColorUI();
-  doc.on('layers', renderLayers);
+  setTool('brush');
+  doc.on('layers', () => { renderLayers(); maybeAutosave(); });
   doc.on('selection', () => { state.view.request(); });
-  doc.on('strokeEnd', () => { state.view.request(); maybeAutosave(); });
+  doc.on('limit', () => toast('Layer limit reached for this canvas size on this device', 2600));
+  let thumbTimer = 0;
+  doc.on('strokeEnd', () => {
+    state.view.request();
+    maybeAutosave();
+    state.timelapse?.mark();
+    // Refresh layer thumbnails after painting (throttled).
+    clearTimeout(thumbTimer);
+    thumbTimer = setTimeout(() => { if (state.doc === doc && !$('#sidePanel').classList.contains('hidden')) renderLayers(); }, 400);
+  });
   if (state.prefs.recordTimelapse !== false) { state.timelapse.start(); state.recording = true; }
   state.view.request();
   if (!state.prefs.seenIntro) { state.prefs.seenIntro = true; store.savePrefs(state.prefs); introSheet(); }
@@ -203,6 +249,7 @@ async function loadDocFromZip(blob, meta) {
   const map = new Map(entries.map((e) => [e.name, e]));
   const head = JSON.parse(new TextDecoder().decode(map.get('doc.json').data));
   const doc = new Doc({ width: head.width, height: head.height, name: meta.name || head.name || 'Artwork', dpi: head.dpi, bgColor: head.bgColor, bgAlpha: head.bgAlpha });
+  const placeholder = doc.layers;
   doc.layers = [];
   doc.id = meta.id || head.id || uid();
 
@@ -216,14 +263,14 @@ async function loadDocFromZip(blob, meta) {
       const l = j.type === 'group'
         ? new (await import('./doc.js')).Group(doc, { name: j.name })
         : new (await import('./doc.js')).Layer(doc, { name: j.name, type: j.type, textData: j.textData });
-      l.id = j.id; l.visible = j.visible; l.opacity = j.opacity; l.blend = j.blend;
-      l.alphaLock = j.alphaLock; l.clipping = j.clipping;
+      l.id = j.id; l.visible = j.visible !== false; l.opacity = j.opacity ?? 1; l.blend = j.blend || 'normal';
+      l.alphaLock = !!j.alphaLock; l.clipping = !!j.clipping;
       if (map.has(`${base}.png`)) {
-        const img = await loadImage(URL.createObjectURL(new Blob([map.get(`${base}.png`).data], { type: 'image/png' })));
+        const img = await blobImage(map.get(`${base}.png`).data);
         ctx2d(l.canvas).drawImage(img, 0, 0);
       }
       if (map.has(`${base}.mask.png`)) {
-        const img = await loadImage(URL.createObjectURL(new Blob([map.get(`${base}.mask.png`).data], { type: 'image/png' })));
+        const img = await blobImage(map.get(`${base}.mask.png`).data);
         l.mask = makeCanvas(doc.width, doc.height);
         ctx2d(l.mask).drawImage(img, 0, 0);
       }
@@ -233,38 +280,69 @@ async function loadDocFromZip(blob, meta) {
     return out;
   };
   doc.layers = await build('layers/');
+  for (const l of placeholder) releaseCanvas(l.canvas);
   if (!doc.layers.length) doc.addLayer({ silent: true });
   const link = (list, parent) => list.forEach((l) => { l.group = parent; if (l.children) link(l.children, l); });
   link(doc.layers, null);
-  doc.activeId = doc.layers[doc.layers.length - 1].id;
+  doc.activeId = doc.findLayer(head.activeId) ? head.activeId : doc.layers[doc.layers.length - 1].id;
+  if (head.createdAt) doc.createdAt = head.createdAt;
   return doc;
 }
 
-async function saveDoc(show) {
-  const doc = state.doc;
-  if (!doc) return;
-  const blob = await doc.serialize();
-  const thumb = await canvasToBlob(compositeThumb(doc, 320), 'image/jpeg', 0.72);
-  const rec = (await store.getDoc(doc.id)) || {};
-  await store.putDoc({ ...rec, id: doc.id, name: doc.name, width: doc.width, height: doc.height, dpi: doc.dpi }, thumb);
-  const stored = await store.getDoc(doc.id);
-  await store.putRaw?.({ ...stored, blob });
-  doc.lastSave = Date.now();
-  if (show) toast('Saved');
+async function blobImage(bytes) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+  try { return await loadImage(url); } finally { URL.revokeObjectURL(url); }
+}
+
+// Saves run one at a time, in order, so two autosaves never interleave their writes.
+let saveChain = Promise.resolve();
+
+function saveDoc(show, doc = state.doc) {
+  if (!doc) return Promise.resolve();
+  const run = saveChain.then(async () => {
+    const blob = await doc.serialize();
+    const tc = compositeThumb(doc, 320);
+    const thumb = await canvasToBlob(tc, 'image/jpeg', 0.72);
+    releaseCanvas(tc);
+    const rec = (await store.getDoc(doc.id)) || {};
+    // One write with the document and its thumbnail together.
+    await store.putRaw({ ...rec, id: doc.id, name: doc.name, width: doc.width, height: doc.height, dpi: doc.dpi, thumb, blob });
+    doc.lastSave = Date.now();
+    if (show) toast('Saved');
+  });
+  saveChain = run.catch((e) => {
+    console.error(e);
+    toast('Saving failed — export a .paintshark copy to be safe', 3200);
+  });
+  return run;
 }
 
 function maybeAutosave() {
   clearTimeout(state.autosaveTimer);
-  state.autosaveTimer = setTimeout(() => saveDoc(false).catch(console.error), 900);
+  const doc = state.doc;
+  state.autosaveTimer = setTimeout(() => saveDoc(false, doc).catch(() => {}), 900);
+}
+
+async function closeCurrentDoc() {
+  const doc = state.doc;
+  if (!doc) return;
+  if (state.stroke) { state.stroke.end(); state.stroke = null; }
+  if (state.transform) state.commitTransform?.();
+  clearTimeout(state.autosaveTimer);
+  await saveDoc(false, doc).catch(() => {});
+  state.timelapse?.stop();
+  if (!$('#refPane').classList.contains('hidden')) state.toggleReference?.();
+  state.doc = null;
+  if (state.view) { state.view.doc = null; state.view.activeStroke = null; }
+  doc.dispose();
 }
 
 async function leaveStudio() {
-  await saveDoc(false).catch(() => {});
-  state.timelapse?.stop();
+  await closeCurrentDoc();
   closePanels();
   $('#studio').classList.add('hidden');
   $('#gallery').classList.remove('hidden');
-  state.doc = null;
+  if (state.reloadPending) { location.reload(); return; }
   renderGallery();
 }
 
