@@ -19,11 +19,13 @@ export function setupStudio() {
   $('#refBtn').onclick = toggleReference;
   $('#refClose').onclick = toggleReference;
   $('#panelClose').onclick = closePanels;
-  $('#colorClose').onclick = () => $('#colorPanel').classList.remove('on');
-  $('#studioClose').onclick = () => $('#studioPanel').classList.remove('on');
+  // Closing any panel hides the whole side area (it used to leave an empty grey block behind).
+  $('#colorClose').onclick = closePanels;
+  $('#studioClose').onclick = closePanels;
   $('#studioBtn').onclick = () => { showPanel('studioPanel'); buildStudio(); };
 
-  for (const t of $$('#toolRail .tool')) t.onclick = () => setTool(t.dataset.tool);
+  // Only real tools (the Brush Studio button is also styled .tool but opens a panel).
+  for (const t of $$('#toolRail .tool[data-tool]')) t.onclick = () => setTool(t.dataset.tool);
 
   $('#layerAdd').onclick = () => state.doc?.addLayer();
   $('#layerDup').onclick = () => state.doc?.duplicateLayer();
@@ -55,7 +57,7 @@ export function setupStudio() {
   $('#presetsBtn').onclick = brushesSheet;
   $('#quickMenuBtn').onclick = quickMenu;
   $('#swapColor').onclick = () => { setupColor.swap(); };
-  $('#primaryWell').onclick = () => showPanel('colorPanel');
+  $('#primaryWell').onclick = () => togglePanel('colorPanel');
   $('#secondaryWell').onclick = () => { setupColor.swap(); showPanel('colorPanel'); };
   $('#addSwatch').onclick = setupColor.addSwatch;
   $('#newPalette').onclick = () => {
@@ -120,10 +122,13 @@ export function fillBlendOptions() {
 export function closePanels() {
   $('#sidePanel').classList.add('hidden');
   for (const p of $$('#sidePanel .panel')) p.classList.remove('on');
+  setTimeout(() => state.view?.resize(), 0);
 }
 export function showPanel(id) {
   $('#sidePanel').classList.remove('hidden');
   for (const p of $$('#sidePanel .panel')) p.classList.toggle('on', p.id === id);
+  setTimeout(() => state.view?.resize(), 0);
+  if (id === 'colorPanel') requestAnimationFrame(() => state.syncColorUI?.());
 }
 function togglePanel(id) {
   const panel = $('#' + id);
