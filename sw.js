@@ -1,10 +1,11 @@
-const CACHE = 'paintshark-v4';
+const CACHE = 'paintshark-v5';
 const ASSETS = [
   '.', 'index.html', 'css/app.css',
   'js/main.js', 'js/appstate.js', 'js/util.js', 'js/brush.js', 'js/doc.js', 'js/zip.js',
   'js/selection.js', 'js/transform.js', 'js/adjust.js', 'js/view.js', 'js/store.js',
   'js/timelapse.js', 'js/sheets.js', 'js/studio.js', 'js/studio2.js', 'js/brushstudio.js',
-  'js/input.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-512.png',
+  'js/input.js', 'manifest.webmanifest', 'icons/logo.png', 'icons/favicon-32.png', 'icons/icon-180.png',
+  'icons/icon-512.png', 'icons/icon-maskable-512.png',
 ];
 
 self.addEventListener('install', (e) => {

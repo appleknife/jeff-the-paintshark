@@ -63,7 +63,8 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 14px; }
 .brand h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .brand p { margin: 2px 0 0; font-size: 12px; }
-.logo { width: 46px; height: 46px; }
+.logo { width: auto; height: 96px; display: block; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; }
 .card {
   position: relative; border: 1px solid var(--line); border-radius: var(--radius);
