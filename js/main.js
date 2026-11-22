@@ -11,6 +11,8 @@ import { syncColorUI, selectBrush, commitTransform } from './studio2.js';
 import { setupInput, setupKeys } from './input.js';
 import { settingsSheet } from './sheets.js';
 import * as store from './store.js';
+import * as sfx from './sfx.js';
+import { ask } from './appstate.js';
 
 function seedPresets() {
   const mk = (name, o) => defaultPreset({ name, ...o });
@@ -30,6 +32,7 @@ async function boot() {
   window.__state = state;
   installRangeFill();
   state.prefs = store.loadPrefs();
+  sfx.install({ prefs: state.prefs });
   state.palettes = store.loadPalettes();
   state.primary = state.prefs.primary || state.primary;
   state.secondary = state.prefs.secondary || state.secondary;
@@ -118,11 +121,16 @@ async function renderGallery() {
       el('span', {}, `${when}, ${d.width} × ${d.height}`)));
     card.onkeydown = (e) => { if (e.key === 'Enter') card.click(); };
     const del = el('button', { class: 'del', title: 'Delete', 'aria-label': `Delete ${d.name || 'artwork'}` }, '✕');
+    del.dataset.sfx = 'none';
     del.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm(`Delete “${d.name}”?`)) { await store.deleteDoc(d.id); renderGallery(); }
+      if (await ask(`Delete “${d.name || 'Untitled'}”?`, 'This removes it from this iPad. Export a .paintshark copy first if you want to keep it.', 'Delete', { danger: true })) {
+        await store.deleteDoc(d.id);
+        renderGallery();
+      }
     };
     card.querySelector('.art').append(del);
+    card.dataset.sfx = 'open';
     card.onclick = () => openDocument(d.id);
     grid.append(card);
   }
@@ -134,11 +142,13 @@ async function renderGallery() {
 
 function newCanvasSheet() {
   sheet((body, close) => {
-    body.append(el('h3', {}, 'New Canvas'));
-    body.append(el('p', { class: 'hint' }, 'Jeff bites. Pick a size, or go custom.'));
-    const grid = el('div', { class: 'preset-grid' });
+    body.append(el('h3', {}, 'New canvas'));
+    body.append(el('p', { class: 'hint' }, 'Pick a size, or set your own below.'));
+    const grid = el('div', { class: 'preset-grid size-grid' });
     for (const [name, w, h] of [['Square', 2048, 2048], ['Wide', 2732, 2048], ['Tall', 1620, 2160], ['4K Square', 4096, 4096], ['Sketchbook', 1536, 2048]]) {
-      const b = el('button', { class: 'preset-card' }, el('b', {}, name), el('span', {}, `${w} × ${h}`));
+      const k = 34 / Math.max(w, h);
+      const shape = el('i', { class: 'size-shape', style: `width:${Math.round(w * k)}px;height:${Math.round(h * k)}px` });
+      const b = el('button', { class: 'preset-card', 'data-sfx': 'none' }, el('div', { class: 'size-box' }, shape), el('b', {}, name), el('span', {}, `${w} × ${h}`));
       b.onclick = async () => { close(); await createDoc(w, h); };
       grid.append(b);
     }
@@ -146,13 +156,14 @@ function newCanvasSheet() {
     const w = el('input', { type: 'number', value: 2048, min: 64, max: 8192 });
     const h = el('input', { type: 'number', value: 2048, min: 64, max: 8192 });
     const dpi = el('input', { type: 'number', value: 132, min: 72, max: 600 });
-    const bg = el('input', { type: 'text', value: '#ffffff' });
-    for (const [label, node] of [['Width', w], ['Height', h], ['DPI', dpi], ['Background', bg]]) {
-      body.append(el('div', { class: 'field' }, el('label', {}, label), node));
-    }
-    body.append(el('div', { class: 'row' }, el('span', { class: 'spacer' }),
+    const bg = el('input', { type: 'color', value: '#ffffff', class: 'color-input' });
+    body.append(el('h4', { class: 'sheet-section' }, 'Custom'));
+    body.append(el('div', { class: 'field-grid' },
+      ...[['Width', w], ['Height', h], ['DPI', dpi], ['Paper', bg]].map(([label, node]) => el('div', { class: 'field' }, el('label', {}, label), node))));
+    body.append(el('div', { class: 'row sheet-actions' },
       el('button', {
         class: 'btn primary',
+        'data-sfx': 'none',
         onclick: async () => {
           close();
           let cw = Math.min(8192, Math.max(64, Math.round(+w.value) || 2048));
@@ -161,7 +172,7 @@ function newCanvasSheet() {
           const [fw, fh] = fitArea(cw, ch);
           if (fw !== cw || fh !== ch) toast(`Too big for Safari — using ${fw} × ${fh}`, 2600);
           cw = fw; ch = fh;
-          const color = /^#[0-9a-f]{6}$/i.test(bg.value.trim()) ? bg.value.trim() : '#ffffff';
+          const color = /^#[0-9a-f]{6}$/i.test(bg.value) ? bg.value : '#ffffff';
           await createDoc(cw, ch, { dpi: +dpi.value || 132, bgColor: color });
         },
       }, 'Create')));
@@ -170,6 +181,7 @@ function newCanvasSheet() {
 
 async function createDoc(w = 2048, h = 2048, opts = {}) {
   const doc = new Doc({ width: w, height: h, name: 'Untitled Artwork', dpi: opts.dpi || 132, bgColor: opts.bgColor || '#ffffff' });
+  sfx.play('splash');
   await openDoc(doc);
 }
 
@@ -219,10 +231,12 @@ async function openDoc(doc) {
   renderLayers();
   selectBrush(state.presets[0]);
   syncColorUI();
+  state.quietTools = true;
   setTool('brush');
+  state.quietTools = false;
   doc.on('layers', () => { renderLayers(); maybeAutosave(); });
   doc.on('selection', () => { state.view.request(); });
-  doc.on('limit', () => toast('Layer limit reached for this canvas size on this device', 2600));
+  doc.on('limit', () => { sfx.play('error'); toast('Layer limit reached for this canvas size on this device', 2600); });
   let thumbTimer = 0;
   doc.on('strokeEnd', () => {
     state.view.request();
@@ -240,9 +254,14 @@ async function openDoc(doc) {
 function introSheet() {
   sheet((body, close) => {
     body.append(el('h3', {}, 'Welcome to the reef'));
-    body.append(el('p', { class: 'hint' }, 'Two fingers = undo · Three fingers = redo · Long-press with the Pencil = eyedropper. Everything is stored on this device.'));
-    body.append(el('p', { class: 'hint' }, 'Install it: Share ▸ Add to Home Screen, so your gallery survives.')); 
-    body.append(el('button', { class: 'btn primary', onclick: close }, 'Start painting'));
+    body.append(el('p', { class: 'hint' }, 'A few shortcuts worth knowing:'));
+    const tips = el('ul', { class: 'tips' });
+    for (const [k, v] of [['Tap with two fingers', 'Undo'], ['Tap with three fingers', 'Redo'], ['Touch and hold with the Pencil', 'Pick a colour'], ['Pinch', 'Zoom and move the canvas']]) {
+      tips.append(el('li', {}, el('span', {}, k), el('b', {}, v)));
+    }
+    body.append(tips);
+    body.append(el('p', { class: 'hint' }, 'Your paintings stay on this iPad. Add the app to your Home Screen (Share, then Add to Home Screen) so the gallery is kept safe.'));
+    body.append(el('div', { class: 'row sheet-actions' }, el('button', { class: 'btn primary', onclick: close }, 'Start painting')));
   });
 }
 
@@ -311,7 +330,7 @@ function saveDoc(show, doc = state.doc) {
     // One write with the document and its thumbnail together.
     await store.putRaw({ ...rec, id: doc.id, name: doc.name, width: doc.width, height: doc.height, dpi: doc.dpi, thumb, blob });
     doc.lastSave = Date.now();
-    if (show) toast('Saved');
+    if (show) { sfx.play('success'); toast('Saved'); }
   });
   saveChain = run.catch((e) => {
     console.error(e);

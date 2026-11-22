@@ -6,6 +6,8 @@ import { exportSheet, guideSheet, timelapseSheet, liquifySheet, adjustSheet, bru
 import { setupColor, syncColorUI, selectBrush, syncBrushSliders, startTransform, cancelTransform, placeText, toggleReference } from './studio2.js';
 import { buildStudio } from './brushstudio.js';
 import * as store from './store.js';
+import * as sfx from './sfx.js';
+import { ask, askText } from './appstate.js';
 
 export function setupStudio() {
   $('#backBtn').onclick = () => state.leaveStudio?.();
@@ -60,8 +62,8 @@ export function setupStudio() {
   $('#primaryWell').onclick = () => togglePanel('colorPanel');
   $('#secondaryWell').onclick = () => { setupColor.swap(); showPanel('colorPanel'); };
   $('#addSwatch').onclick = setupColor.addSwatch;
-  $('#newPalette').onclick = () => {
-    const name = prompt('Palette name');
+  $('#newPalette').onclick = async () => {
+    const name = await askText('New palette', '', 'Create');
     if (!name) return;
     state.palettes.push({ id: uid(), name, colors: [] });
     store.savePalettes(state.palettes);
@@ -91,13 +93,14 @@ export function setupStudio() {
     selectBrush(saved || defaultPreset({ name: state.brush.name }));
     buildStudio();
   };
-  $('#saveBrush').onclick = () => {
-    const name = prompt('Preset name', state.brush.name);
+  $('#saveBrush').onclick = async () => {
+    const name = await askText('Save brush preset', state.brush.name, 'Save');
     if (!name) return;
     const p = { ...JSON.parse(JSON.stringify(state.brush)), id: uid(), name };
     state.presets.push(p);
     store.savePresets(state.presets);
     selectBrush(p);
+    sfx.play('success');
     toast('Preset saved');
   };
 
@@ -120,11 +123,13 @@ export function fillBlendOptions() {
 }
 
 export function closePanels() {
+  if (!$('#sidePanel').classList.contains('hidden') && !sfx.playedRecently(60)) sfx.play('close');
   $('#sidePanel').classList.add('hidden');
   for (const p of $$('#sidePanel .panel')) p.classList.remove('on');
   setTimeout(() => state.view?.resize(), 0);
 }
 export function showPanel(id) {
+  if (($('#sidePanel').classList.contains('hidden') || !$('#' + id).classList.contains('on')) && !sfx.playedRecently(60)) sfx.play('open');
   $('#sidePanel').classList.remove('hidden');
   for (const p of $$('#sidePanel .panel')) p.classList.toggle('on', p.id === id);
   setTimeout(() => state.view?.resize(), 0);
@@ -145,7 +150,13 @@ export function setTool(tool) {
     state.commitTransform?.();
     if (state.transform === t) state.transform = null;
   }
+  const prev = state.tool;
   state.tool = tool;
+  if (tool !== prev && !state.quietTools) {
+    // Each tool has its own note on a pentatonic scale, so the rail plays a little tune.
+    const order = $$('#toolRail .tool[data-tool]').map((b) => b.dataset.tool);
+    sfx.play('tool', Math.max(0, order.indexOf(tool)));
+  }
   const isBrush = ['brush', 'smudge', 'erase'].includes(tool);
   for (const t of $$('#toolRail .tool')) t.classList.toggle('on', t.dataset.tool === tool);
   state.view.canvas.style.cursor = isBrush ? 'crosshair' : tool === 'eyedropper' ? 'copy' : tool === 'transform' ? 'move' : 'default';
@@ -164,6 +175,7 @@ function toggleFlag(flag) {
   const l = state.doc?.active;
   if (!l) return;
   l[flag] = !l[flag];
+  sfx.play(l[flag] ? 'toggleOn' : 'toggleOff');
   renderLayers();
   state.view.request();
   state.maybeAutosave?.();
@@ -175,6 +187,7 @@ function toggleMask() {
   if (!l) return;
   if (!l.mask && !doc.canAllocate(1)) { toast('Not enough canvas memory for a mask'); return; }
   doc.pushStructureUndo(); // removing a mask can be undone
+  sfx.play(l.mask ? 'toggleOff' : 'toggleOn');
   if (l.mask) l.mask = null;
   else {
     l.mask = makeCanvas(state.doc.width, state.doc.height);
@@ -193,8 +206,8 @@ function readyForHistory() {
   if (state.transform) { cancelTransform(); return false; }
   return true;
 }
-export function doUndo() { if (readyForHistory() && state.doc.undo()) { state.view.request(); state.maybeAutosave?.(); } }
-export function doRedo() { if (readyForHistory() && state.doc.redo()) { state.view.request(); state.maybeAutosave?.(); } }
+export function doUndo() { if (readyForHistory() && state.doc.undo()) { sfx.play('undo'); state.view.request(); state.maybeAutosave?.(); } }
+export function doRedo() { if (readyForHistory() && state.doc.redo()) { sfx.play('redo'); state.view.request(); state.maybeAutosave?.(); } }
 
 export function mergeDown() {
   const doc = state.doc;
@@ -260,20 +273,20 @@ export function renderLayers() {
     if (depth) name.style.paddingLeft = `${6 + depth * 12}px`;
     const icon = (id) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); const u = document.createElementNS('http://www.w3.org/2000/svg', 'use'); u.setAttribute('href', `#${id}`); s.append(u); return s; };
     const vis = el('button', { class: 'mini' + (layer.visible ? ' on' : ''), title: layer.visible ? 'Hide layer' : 'Show layer', 'aria-label': 'Toggle visibility' }, icon(layer.visible ? 'i-eye' : 'i-eye-off'));
-    vis.onclick = (e) => { e.stopPropagation(); layer.visible = !layer.visible; renderLayers(); state.view.request(); state.maybeAutosave?.(); };
+    vis.onclick = (e) => { e.stopPropagation(); layer.visible = !layer.visible; sfx.play(layer.visible ? 'toggleOn' : 'toggleOff'); renderLayers(); state.view.request(); state.maybeAutosave?.(); };
     const lock = el('button', { class: 'mini flag' + (layer.alphaLock ? ' on' : ''), title: 'Alpha lock', 'aria-label': 'Alpha lock' }, icon('i-lock'));
-    lock.onclick = (e) => { e.stopPropagation(); layer.alphaLock = !layer.alphaLock; renderLayers(); state.maybeAutosave?.(); };
+    lock.onclick = (e) => { e.stopPropagation(); layer.alphaLock = !layer.alphaLock; sfx.play(layer.alphaLock ? 'toggleOn' : 'toggleOff'); renderLayers(); state.maybeAutosave?.(); };
     const mask = el('button', { class: 'mini flag' + (layer.mask ? ' on' : ''), title: 'Layer mask', 'aria-label': 'Layer mask' }, icon('i-mask'));
     mask.onclick = (e) => { e.stopPropagation(); doc.activeId = layer.id; toggleMask(); };
     item.append(thumb, name, vis, lock, mask);
-    item.onclick = () => { doc.activeId = layer.id; renderLayers(); };
+    item.onclick = () => { if (doc.activeId !== layer.id) sfx.play('soft'); doc.activeId = layer.id; renderLayers(); };
     list.append(item);
   }
 }
 
 function selectionPanelEl() {
-  const wrap = el('div', { id: 'selPanel', class: 'layer-opts' });
-  wrap.append(el('b', { style: 'font-size:12px' }, 'Selection'));
+  const wrap = el('div', { id: 'selPanel', class: 'layer-opts sel-panel' });
+  wrap.append(el('b', { class: 'sel-title' }, 'Selection'));
   const modes = el('div', { class: 'layer-toggles' });
   for (const m of ['freehand', 'rect', 'ellipse', 'auto']) {
     const b = el('button', { class: 'chip' + (state.sel.mode === m ? ' on' : '') }, m);
@@ -291,8 +304,8 @@ function selectionPanelEl() {
   const threshold = el('input', { type: 'range', min: 1, max: 100, value: state.sel.threshold * 100 });
   threshold.oninput = () => { state.sel.threshold = +threshold.value / 100; };
   wrap.append(modes, ops,
-    el('label', { class: 'slider-row' }, 'Feather', feather),
-    el('label', { class: 'slider-row' }, 'Auto tol.', threshold),
+    el('label', {}, 'Feather', feather),
+    el('label', {}, 'Auto-select tolerance', threshold),
     el('div', { class: 'layer-toggles' },
       el('button', { class: 'btn small', onclick: () => state.sel.invert() }, 'Invert'),
       el('button', { class: 'btn small', onclick: () => state.sel.clear() }, 'Clear')),

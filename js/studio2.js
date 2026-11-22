@@ -3,6 +3,7 @@ import { clearTipCache } from './brush.js';
 import { TransformSession } from './transform.js';
 import { state, toast } from './appstate.js';
 import * as store from './store.js';
+import * as sfx from './sfx.js';
 
 let hsv = [22, 0.72, 1];
 
@@ -155,6 +156,7 @@ function renderSwatches() {
     el('button', { class: 'btn small ghost', onclick: () => { state.paletteIndex = (state.paletteIndex + 1) % state.palettes.length; renderSwatches(); } }, 'Next')));
   for (const c of palette.colors) {
     const s = el('button', { class: 'swatch' + (c.toLowerCase() === state.primary.toLowerCase() ? ' on' : ''), style: { background: c }, 'aria-label': c });
+    s.dataset.sfx = 'pick';
     s.onclick = () => { state.primary = c; syncColorUI(); saveColors(); };
     wrap.append(s);
   }
@@ -196,18 +198,17 @@ export function startTransform() {
   if (!doc.canAllocate(1)) { toast('Not enough canvas memory to transform'); return false; }
   state.transform = new TransformSession(doc, l, state.sel);
   doc.liveTransform = state.transform;
-  const bar = el('div', { id: 'transformBar', class: 'layer-opts',
-    style: 'position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:8;background:#17181d;border:1px solid #2b2e37;border-radius:10px;display:flex;gap:6px;padding:6px' });
+  const bar = el('div', { id: 'transformBar' });
   bar.append(
-    el('button', { class: 'btn small primary', onclick: commitTransform }, 'Done'),
-    el('button', { class: 'btn small', onclick: () => { state.transform?.ensureWarp(); } }, 'Warp'),
+    el('button', { class: 'btn small primary', 'data-sfx': 'none', onclick: commitTransform }, 'Done'),
+    el('button', { class: 'btn small', onclick: (e) => { state.transform?.ensureWarp(); e.currentTarget.classList.add('on'); sfx.play('toggleOn'); } }, 'Warp'),
     el('button', { class: 'btn small', onclick: () => {
       const t = state.transform;
       if (t) { t.tx = 0; t.ty = 0; t.scaleX = 1; t.scaleY = 1; t.rotate = 0; t.warp = null; }
       state.view.request();
     } }, 'Reset'),
-    el('button', { class: 'btn small', onclick: () => cancelTransform() }, 'Cancel'));
-  $('#stageWrap').append(bar);
+    el('button', { class: 'btn small ghost', 'data-sfx': 'none', onclick: () => cancelTransform() }, 'Cancel'));
+  $('#studio').append(bar);
   state.view.request();
   return true;
 }
@@ -224,8 +225,11 @@ export function commitTransform() {
   if (!t) return;
   endTransform(t);
   t.commit();
+  sfx.play('success');
   state.view?.request();
+  state.quietTools = true;
   if (state.tool === 'transform') state.setTool?.('brush');
+  state.quietTools = false;
 }
 
 export function cancelTransform() {
@@ -233,8 +237,11 @@ export function cancelTransform() {
   if (!t) return;
   endTransform(t);
   t.cancel();
+  sfx.play('close');
   state.view?.request();
+  state.quietTools = true;
   if (state.tool === 'transform') state.setTool?.('brush');
+  state.quietTools = false;
 }
 
 /* ---------- text ---------- */
@@ -269,6 +276,7 @@ export function placeText({ text, font, size }) {
   g.globalAlpha = 1;
   state.setTool?.('brush');
   state.refreshView?.();
+  sfx.play('add');
   toast('Text layer added');
 }
 
