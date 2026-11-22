@@ -34,7 +34,7 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { height: 100%; margin: 0; overflow: hidden; }
+html, body { height: 100%; margin: 0; overflow: hidden; touch-action: pan-x pan-y; } /* no page pinch-zoom */
 body {
   background: var(--ink);
   color: var(--text);

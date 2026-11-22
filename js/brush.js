@@ -136,15 +136,18 @@ export function tipCanvas(preset) {
   } else {
     const fat = clamp(preset.shapeRoundness, 0.08, 1);
     const hard = clamp(preset.hardness ?? 0.55, 0.01, 0.94);
-    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.5);
+    g.save();
+    g.translate(size / 2, size / 2);
+    g.scale(fat, 1);
+    // The gradient is created after the transform, centred on (0, 0). (It used to be built at
+    // (size/2, size/2) before translating, which put its centre in the bottom-right corner, so
+    // every soft brush painted down and to the right of the pen.)
+    const grad = g.createRadialGradient(0, 0, 0, 0, 0, size * 0.48);
     grad.addColorStop(0, 'rgba(255,255,255,1)');
     grad.addColorStop(hard, 'rgba(255,255,255,0.95)');
     grad.addColorStop(hard + (1 - hard) * 0.6, 'rgba(255,255,255,0.55)');
     grad.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = grad;
-    g.save();
-    g.translate(size / 2, size / 2);
-    g.scale(fat, 1);
     g.beginPath();
     g.arc(0, 0, size * 0.48, 0, Math.PI * 2);
     g.fill();
@@ -239,6 +242,10 @@ export class Stroke {
     this.layer = env.layer;
     this.selection = env.selection || null;
     this.symmetry = env.symmetry || 'off';
+    // On-screen zoom when the stroke started. Tapers are measured on screen, so a stroke looks
+    // the same whether you're zoomed out or zoomed right in.
+    this.zoom = env.zoom || 0.35;
+    this._lastSize = null;
     this.enabled = true;
     this.last = null;
     this.smooth = null;
@@ -282,6 +289,7 @@ export class Stroke {
     if (b.taperStart > 0 || b.taperEnd > 0) {
       size *= lerp(1, taperMul, clamp(Math.max(b.taperSize || 0, b.taperPressure || 0)));
     }
+    this._lastSize = size;
     const opacity = clamp(b.opacity * pa * (b.flow || 1), 0, 1);
     const angle = (b.shapeAngle * Math.PI) + (b.shapeAzimuth && tilt > 0.02 ? azimuth : 0);
     const scatter = b.shapeScatter * base * 2;
@@ -410,7 +418,9 @@ export class Stroke {
     const to = this.smooth;
     const dx = to.x - from.x, dy = to.y - from.y;
     const dist = Math.hypot(dx, dy);
-    const spacing = Math.max(0.35, this.brush.spacing * Math.max(1, this.brush.size * this.doc.width));
+    // Space stamps by the size actually being drawn (a tapered tip is small, so stamps sit closer).
+    const drawn = this._lastSize ?? this.brush.size * this.doc.width;
+    const spacing = Math.max(0.35, this.brush.spacing * Math.max(1, drawn));
     const speed = dist / Math.max(1, to.t - from.t);
     let travelled = 0;
     let stamped = false;
@@ -433,7 +443,9 @@ export class Stroke {
 
   _taperAmount(len) {
     const b = this.brush;
-    const startLen = b.taperStart * this.doc.width * 0.5;
+    // Taper length in screen pixels (about 340 px at full taper), converted to canvas pixels.
+    // It used to be a fraction of the canvas width, so zoomed in, whole strokes stayed thin specks.
+    const startLen = b.taperStart * Math.min(this.doc.width * 0.5, 340 / this.zoom);
     if (startLen > 0 && len < startLen) return 1 - len / startLen;
     return 0;
   }

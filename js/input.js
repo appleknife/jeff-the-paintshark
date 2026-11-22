@@ -119,7 +119,10 @@ export function setupInput() {
     if (state.tool === 'eyedropper' && e.buttons) { pickColor(pt.x, pt.y); return; }
     if (state.tool === 'transform' && state.transform && e.buttons) { onTransformMove(pt); return; }
     if (state.stroke && e.buttons && (!strokePointer || strokePointer.id === e.pointerId)) {
-      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      let events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      // Safari's coalesced events are new (iOS 18.2) and some lack fields; ignore any sample
+      // that isn't close to the real event rather than painting it somewhere else.
+      events = events.filter((ev) => Number.isFinite(ev.clientX) && Math.abs(ev.clientX - e.clientX) < 80 && Math.abs(ev.clientY - e.clientY) < 80);
       for (const ev of events.length ? events : [e]) {
         const p = toDoc(ev);
         state.stroke.move({ x: p.x, y: p.y, pressure: pressureOf(ev), tilt: tiltOf(ev), azimuth: azimuthOf(ev) });
@@ -254,6 +257,7 @@ export function setupInput() {
         mode: state.tool === 'erase' ? 'erase' : state.tool === 'smudge' ? 'smudge' : 'paint',
         symmetry: doc.symmetry,
         color: hexToRgbLocal(state.primary, state.alpha),
+        zoom: state.view.zoom,
       });
       strokePointer = { id: e.pointerId, type: e.pointerType, t: performance.now() };
       state.stroke.begin({ x: pt.x, y: pt.y, pressure: pressureOf(e), tilt: tiltOf(e), azimuth: azimuthOf(e) });
