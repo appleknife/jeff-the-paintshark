@@ -1,5 +1,6 @@
 import { el, clamp } from './util.js';
 import { defaultPreset } from './brush.js';
+import * as sfx from './sfx.js';
 
 export const state = {
   doc: null,
@@ -53,6 +54,7 @@ export function sheet(build) {
   body.innerHTML = '';
   const close = () => closeSheet();
   build(body, close);
+  if (s.classList.contains('hidden') && !sfx.playedRecently(60)) sfx.play('open');
   s.classList.remove('hidden');
   s.onclick = (e) => { if (e.target === s) close(); };
   return body;
@@ -60,9 +62,45 @@ export function sheet(build) {
 
 export function closeSheet() {
   const s = document.querySelector('#sheet');
+  if (!s.classList.contains('hidden') && !sfx.playedRecently(60)) sfx.play('close');
   s.classList.add('hidden');
   s.querySelector('.sheet-body').innerHTML = '';
   queueMicrotask(() => document.dispatchEvent(new CustomEvent('sheetclosed')));
+}
+
+/** In-app replacement for confirm(): resolves true/false. */
+export function ask(title, text, okLabel = 'OK', { danger = false } = {}) {
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { if (!answered) { answered = true; resolve(v); } };
+    sheet((body, close) => {
+      body.append(el('h3', {}, title));
+      if (text) body.append(el('p', { class: 'hint' }, text));
+      body.append(el('div', { class: 'row sheet-actions' },
+        el('button', { class: 'btn ghost', onclick: () => { done(false); close(); } }, 'Cancel'),
+        el('button', { class: `btn ${danger ? 'danger' : 'primary'}`, 'data-sfx': danger ? 'remove' : 'tap', onclick: () => { done(true); close(); } }, okLabel)));
+    });
+    document.addEventListener('sheetclosed', () => done(false), { once: true });
+  });
+}
+
+/** In-app replacement for prompt(): resolves the text, or null if cancelled. */
+export function askText(title, value = '', okLabel = 'Save') {
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { if (!answered) { answered = true; resolve(v); } };
+    sheet((body, close) => {
+      body.append(el('h3', {}, title));
+      const input = el('input', { type: 'text', value, style: 'width:100%;margin:10px 0 4px' });
+      const ok = () => { const v = input.value.trim(); if (!v) return; done(v); close(); };
+      input.onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+      body.append(input, el('div', { class: 'row sheet-actions' },
+        el('button', { class: 'btn ghost', onclick: () => { done(null); close(); } }, 'Cancel'),
+        el('button', { class: 'btn primary', onclick: ok }, okLabel)));
+      setTimeout(() => { input.focus(); input.select(); }, 60);
+    });
+    document.addEventListener('sheetclosed', () => done(null), { once: true });
+  });
 }
 
 export function field(labelText, input) {

@@ -124,10 +124,10 @@
         <header class="panel-head">
           <b>Layers</b>
           <span class="spacer"></span>
-          <button class="icon-btn" id="layerAdd" title="Add"><svg><use href="#i-plus"/></svg></button>
-          <button class="icon-btn" id="layerDup" title="Duplicate"><svg><use href="#i-dup"/></svg></button>
-          <button class="icon-btn" id="layerMerge" title="Merge down"><svg><use href="#i-merge"/></svg></button>
-          <button class="icon-btn" id="layerDel" title="Delete"><svg><use href="#i-trash"/></svg></button>
+          <button class="icon-btn" id="layerAdd" title="Add layer" data-sfx="add"><svg><use href="#i-plus"/></svg></button>
+          <button class="icon-btn" id="layerDup" title="Duplicate layer" data-sfx="add"><svg><use href="#i-dup"/></svg></button>
+          <button class="icon-btn" id="layerMerge" title="Merge down" data-sfx="brush"><svg><use href="#i-merge"/></svg></button>
+          <button class="icon-btn" id="layerDel" title="Delete layer" data-sfx="remove"><svg><use href="#i-trash"/></svg></button>
           <button class="icon-btn" id="layerGroup" title="Group"><svg><use href="#i-layers"/></svg></button>
           <button class="icon-btn" id="panelClose"><svg><use href="#i-close"/></svg></button>
         </header>
@@ -164,7 +164,7 @@
         </div>
         <div class="swatches" id="swatches"></div>
         <div class="row small">
-          <button class="btn small" id="addSwatch">Save swatch</button>
+          <button class="btn small" id="addSwatch" data-sfx="add">Save swatch</button>
           <button class="btn small ghost" id="newPalette">New palette</button>
         </div>
       </div>
@@ -185,7 +185,7 @@
     <div class="color-wells">
       <button class="well" id="primaryWell" title="Colour" aria-label="Colour"></button>
       <button class="well" id="secondaryWell" title="Secondary colour" aria-label="Secondary colour"></button>
-      <button class="icon-btn small" id="swapColor" title="Swap colours" aria-label="Swap colours"><svg><use href="#i-swap"/></svg></button>
+      <button class="icon-btn small" id="swapColor" data-sfx="pick" title="Swap colours" aria-label="Swap colours"><svg><use href="#i-swap"/></svg></button>
     </div>
     <div class="brush-sliders">
       <label class="dock-slider"><span>Size <output id="sizeVal">40</output></span><input id="sizeSlider" type="range" min="1" max="500" value="40"></label>

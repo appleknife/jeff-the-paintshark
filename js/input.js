@@ -5,6 +5,7 @@ import { quickMenu } from './sheets.js';
 import { doUndo, doRedo, setTool } from './studio.js';
 import { commitTransform, cancelTransform, syncBrushSliders } from './studio2.js';
 import { liquify } from './transform.js';
+import * as sfx from './sfx.js';
 
 // One multi-finger gesture, from the first finger down until the last finger up.
 let gesture = null;
@@ -329,6 +330,7 @@ export function setupInput() {
     state.primary = '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
     state.syncColorUI?.();
     state.prefs.primary = state.primary;
+    sfx.play('pick');
     toast(`Picked ${state.primary.toUpperCase()}`);
   }
 

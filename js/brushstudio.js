@@ -18,6 +18,17 @@ const STUDIO_GROUPS = [
   ['Stamp', [['jitter', 'range', 0, 1, 0.01], ['angleJitter', 'range', 0, 1, 0.01], ['stamp', 'check']]],
 ];
 
+// Short, plain names for the Brush Studio rows.
+const LABELS = {
+  shape: 'Tip', hardness: 'Hardness', shapeRoundness: 'Roundness', shapeAngle: 'Angle', shapeScatter: 'Scatter', shapeCount: 'Count',
+  grain: 'Texture', grainDepth: 'Depth', grainScale: 'Scale',
+  'dynamics.pressureSize': 'Pressure size', 'dynamics.pressureOpacity': 'Pressure opacity', 'dynamics.tiltSize': 'Tilt size', 'dynamics.speedSize': 'Speed size',
+  spacing: 'Spacing', spacingJitter: 'Spacing jitter', taperStart: 'Taper start', taperEnd: 'Taper end', taperPressure: 'Taper amount',
+  streamline: 'StreamLine', motionFilter: 'Smoothing', pressureResponse: 'Pressure response',
+  wetMix: 'Wet mix', wetEdges: 'Wet edges', glaze: 'Glaze', jitter: 'Jitter', angleJitter: 'Angle jitter', stamp: 'Stamp mode',
+};
+const labelFor = (path) => LABELS[path] || path;
+
 const getPath = (o, p) => p.split('.').reduce((x, k) => x?.[k], o);
 const setPath = (o, p, v) => {
   const parts = p.split('.');
@@ -28,8 +39,7 @@ const setPath = (o, p, v) => {
 export function buildStudio() {
   const scroll = $('#studioScroll');
   scroll.innerHTML = '';
-  scroll.append(el('div', { class: 'row' }, el('b', {}, state.brush.name), el('span', { class: 'spacer' }),
-    el('span', { class: 'muted', style: 'font-size:11px' }, 'live')));
+  scroll.append(el('div', { class: 'studio-title' }, el('b', {}, state.brush.name), el('span', {}, 'Changes apply as you paint')));
   for (const [title, rows] of STUDIO_GROUPS) {
     const box = el('div', { class: 'rows' });
     for (const [path, kind, a, b, step] of rows) {
@@ -44,7 +54,7 @@ export function buildStudio() {
           clearTipCache();
           state.syncBrushSliders?.();
         };
-        box.append(el('label', {}, el('span', {}, path.split('.').pop().replace(/([A-Z])/g, ' $1').toLowerCase()), input, out));
+        box.append(el('label', {}, el('span', {}, labelFor(path)), input, out));
         continue;
       }
       if (kind === 'select') {
@@ -54,7 +64,7 @@ export function buildStudio() {
         input = el('input', { type: 'checkbox', checked: !!value });
         input.onchange = () => setPath(state.brush, path, input.checked);
       }
-      box.append(el('label', {}, el('span', {}, path), input, el('span')));
+      box.append(el('label', {}, el('span', {}, labelFor(path)), input, el('span')));
     }
     scroll.append(el('div', { class: 'studio-group' }, el('h4', {}, title), box));
   }

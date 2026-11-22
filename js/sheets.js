@@ -6,6 +6,7 @@ import { ADJUSTMENTS, applyAdjustment, defaultParams } from './adjust.js';
 import { LIQUIFY_MODES } from './transform.js';
 import { state, toast, sheet, field, gestures, closeSheet } from './appstate.js';
 import { Timelapse } from './timelapse.js';
+import * as sfx from './sfx.js';
 import * as store from './store.js';
 
 export async function exportSheet() {
@@ -108,14 +109,14 @@ export function guideSheet() {
     const sym = el('select', {}, ...[['off', 'None'], ['x', 'Vertical'], ['y', 'Horizontal'], ['quad', 'Quadrant'], ['radial', 'Radial'], ['rotational', 'Rotational']]
       .map(([v, t]) => el('option', { value: v, selected: doc.symmetry === v }, t)));
     sym.onchange = () => { doc.symmetry = sym.value; if (g.type !== 'symmetry') g.type = 'symmetry'; state.view.request(); };
-    const color = el('input', { type: 'text', value: g.color });
+    const color = el('input', { type: 'color', value: g.color, class: 'color-input' });
     color.oninput = () => { g.color = color.value; state.view.request(); };
     const opacity = el('input', { type: 'range', min: 10, max: 100, value: g.opacity * 100 });
     opacity.oninput = () => { g.opacity = +opacity.value / 100; state.view.request(); };
     const size = el('input', { type: 'range', min: 1, max: 6, value: g.size });
     size.oninput = () => { g.size = +size.value; state.view.request(); };
     body.append(field('Guide', type), field('Symmetry', sym), field('Line color', color), field('Opacity', opacity), field('Line size', size));
-    body.append(el('button', { class: 'btn primary', onclick: close }, 'Done'));
+    body.append(el('div', { class: 'row sheet-actions' }, el('button', { class: 'btn primary', onclick: close }, 'Done')));
   });
 }
 
@@ -274,6 +275,7 @@ export function adjustSheet() {
         onclick: () => {
           doc.pushUndo(layer);
           applyAdjustment(doc, layer, kind.value, params, state.sel?.active ? state.sel : null);
+          sfx.play('success');
           close();
           toast('Adjustment applied');
         },
@@ -291,7 +293,9 @@ export function brushesSheet() {
       const c = brushPreview(p);
       const kind = p.mode === 'erase' ? 'Eraser' : p.mode === 'smudge' ? 'Smudge' : `Size ${Math.round(p.size * 1000)}`;
       card.append(c, el('b', {}, p.name), el('span', {}, kind));
+      card.dataset.sfx = 'none';
       card.onclick = () => {
+        sfx.play('brush');
         state.selectBrush?.(p);
         // Picking a smudge/eraser preset switches to that tool.
         if (p.mode === 'smudge' || p.mode === 'erase') state.setTool?.(p.mode);
@@ -369,28 +373,69 @@ export function toggleFullscreen() {
   state.toggleFullscreen?.();
 }
 
+const GESTURE_LABELS = {
+  twoFingerTap: 'Two-finger tap',
+  threeFingerTap: 'Three-finger tap',
+  threeFingerSwipeDown: 'Three-finger swipe down',
+  fourFingerTap: 'Four-finger tap',
+  holdPencil: 'Touch and hold with Pencil',
+};
+const ACTION_LABELS = { undo: 'Undo', redo: 'Redo', quickmenu: 'QuickMenu', eyedropper: 'Eyedropper', fullscreen: 'Full screen', none: 'Nothing' };
+
+/** An iOS-style on/off switch. */
+export function switchEl(on, onchange, label) {
+  const b = el('button', { class: 'switch' + (on ? ' on' : ''), role: 'switch', 'aria-checked': String(!!on), 'aria-label': label, 'data-sfx': 'none' });
+  b.onclick = () => {
+    const v = !b.classList.contains('on');
+    b.classList.toggle('on', v);
+    b.setAttribute('aria-checked', String(v));
+    onchange(v);
+  };
+  return b;
+}
+
+const settingRow = (label, hint, control) => el('div', { class: 'setting' },
+  el('div', {}, el('b', {}, label), hint ? el('span', {}, hint) : null), control);
+
 export function settingsSheet() {
   sheet((body, close) => {
-    body.append(el('h3', {}, 'Jeff settings'));
-    body.append(el('p', { class: 'hint' }, 'Gesture targets, recording and storage.'));
-    const tl = el('input', { type: 'checkbox', checked: state.prefs.recordTimelapse !== false });
-    tl.onchange = () => { state.prefs.recordTimelapse = tl.checked; savePrefs(); };
-    body.append(field('Record time-lapse', tl));
+    body.append(el('h3', {}, 'Settings'));
+
+    body.append(el('h4', { class: 'sheet-section' }, 'Sound'));
+    const vol = el('input', { type: 'range', min: 0, max: 100, value: Math.round(sfx.getVolume() * 100) });
+    vol.oninput = () => { sfx.setVolume(+vol.value / 100); state.prefs.soundVolume = +vol.value / 100; savePrefs(); };
+    vol.onchange = () => sfx.play('success');
+    const volRow = settingRow('Volume', null, vol);
+    volRow.classList.toggle('dim', !sfx.isEnabled());
+    body.append(settingRow('Interface sounds', 'Little pops and bubbles as you tap. Follows the silent switch.',
+      switchEl(sfx.isEnabled(), (v) => {
+        sfx.setEnabled(v);
+        state.prefs.sound = v;
+        savePrefs();
+        volRow.classList.toggle('dim', !v);
+        if (v) sfx.play('toggleOn');
+      }, 'Interface sounds')), volRow);
+
+    body.append(el('h4', { class: 'sheet-section' }, 'Recording'));
+    body.append(settingRow('Record time-lapse', 'Captures a frame each time you change the painting.',
+      switchEl(state.prefs.recordTimelapse !== false, (v) => { state.prefs.recordTimelapse = v; savePrefs(); sfx.play(v ? 'toggleOn' : 'toggleOff'); }, 'Record time-lapse')));
+
+    body.append(el('h4', { class: 'sheet-section' }, 'Gestures'));
     for (const key of Object.keys(gestures)) {
-      const s = el('select', {}, ...['undo', 'redo', 'quickmenu', 'eyedropper', 'fullscreen', 'none']
-        .map((v) => el('option', { value: v, selected: gestures[key] === v }, v)));
-      s.onchange = () => { gestures[key] = s.value; state.prefs.gestures = gestures; savePrefs(); };
-      body.append(field(key.replace(/([A-Z])/g, ' $1').toLowerCase(), s));
+      const s = el('select', {}, ...Object.entries(ACTION_LABELS)
+        .map(([v, t]) => el('option', { value: v, selected: gestures[key] === v }, t)));
+      s.onchange = () => { gestures[key] = s.value; state.prefs.gestures = { ...gestures }; savePrefs(); };
+      body.append(settingRow(GESTURE_LABELS[key] || key, null, s));
     }
-    body.append(el('div', { class: 'row' },
+    body.append(el('div', { class: 'row sheet-actions' },
       el('button', {
-        class: 'btn',
+        class: 'btn ghost',
+        'data-sfx': 'none',
         onclick: async () => {
           if (!state.doc) { toast('Open a canvas first'); return; }
-          try { await state.saveDoc?.(false); toast('Saved now'); } catch { /* toast shown by saveDoc */ }
+          try { await state.saveDoc?.(true); } catch { /* toast shown by saveDoc */ }
         },
       }, 'Save now'),
-      el('span', { class: 'spacer' }),
       el('button', { class: 'btn primary', onclick: close }, 'Done')));
   });
 }
@@ -402,12 +447,10 @@ function savePrefs() {
 export function textSheet(commit) {
   sheet((body, close) => {
     body.append(el('h3', {}, 'Add Text'));
-    const ta = el('textarea', {
-      rows: 4,
-      style: 'width:100%;background:#0c0d10;color:#fff;border:1px solid #2b2e37;border-radius:8px;padding:9px;font:inherit',
-    });
+    const ta = el('textarea', { rows: 4, placeholder: 'Type something…', style: 'width:100%;margin-bottom:12px' });
     body.append(ta);
-    const font = el('select', {}, ...['system-ui', 'Georgia', 'Courier New', 'Impact'].map((f) => el('option', { value: f }, f)));
+    const font = el('select', {}, ...[['Nunito', 'Rounded'], ['system-ui', 'Clean'], ['Georgia', 'Serif'], ['Courier New', 'Typewriter'], ['Impact', 'Poster']]
+      .map(([f, t]) => el('option', { value: f }, t)));
     const size = el('input', { type: 'range', min: 12, max: 320, value: 96 });
     body.append(field('Font', font), field('Size', size));
     body.append(el('div', { class: 'row' }, el('span', { class: 'spacer' }),
