@@ -96,7 +96,7 @@ export function setupStudio() {
   $('#saveBrush').onclick = async () => {
     const name = await askText('Save brush preset', state.brush.name, 'Save');
     if (!name) return;
-    const p = { ...JSON.parse(JSON.stringify(state.brush)), id: uid(), name };
+    const p = { ...JSON.parse(JSON.stringify(state.brush)), id: uid(), name, seed: false, custom: true };
     state.presets.push(p);
     store.savePresets(state.presets);
     selectBrush(p);

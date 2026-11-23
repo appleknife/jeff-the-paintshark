@@ -95,11 +95,12 @@ export function defaultPalettes() {
 
 const PRESET_KEY = 'paintshark.presets.v1';
 
-export function loadPresets(fallback) {
+export function loadPresets(fallback, base = fallback[0]) {
   try {
     const p = JSON.parse(localStorage.getItem(PRESET_KEY));
-    // Fill in settings added since a preset was saved, so older presets keep working.
-    return Array.isArray(p) && p.length ? p.map((x) => ({ ...fallback[0], dynamics: { ...fallback[0].dynamics }, ...x, dynamics: { ...fallback[0].dynamics, ...(x.dynamics || {}) } })) : fallback;
+    // Fill in settings added since a preset was saved, so older presets keep working. The base is
+    // a plain default brush: filling from the first seed would give every saved brush its texture.
+    return Array.isArray(p) && p.length ? p.map((x) => ({ ...base, dynamics: { ...base.dynamics }, ...x, dynamics: { ...base.dynamics, ...(x.dynamics || {}) } })) : fallback;
   } catch { return fallback; }
 }
 

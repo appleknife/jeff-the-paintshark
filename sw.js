@@ -1,4 +1,4 @@
-const CACHE = 'paintshark-v15';
+const CACHE = 'paintshark-v16';
 const ASSETS = [
   '.', 'index.html', 'css/app.css',
   'js/main.js', 'js/appstate.js', 'js/util.js', 'js/brush.js', 'js/doc.js', 'js/zip.js',
@@ -6,6 +6,9 @@ const ASSETS = [
   'js/timelapse.js', 'js/sheets.js', 'js/studio.js', 'js/studio2.js', 'js/brushstudio.js',
   'js/input.js', 'js/sfx.js', 'manifest.webmanifest', 'icons/logo.png', 'icons/favicon-32.png', 'icons/icon-180.png',
   'icons/icon-512.png', 'icons/icon-maskable-512.png', 'fonts/nunito-latin-wght-normal.woff2',
+  'assets/brushes/brush_pencil_graphite.png', 'assets/brushes/brush_pen01.png', 'assets/brushes/brush_flat_calligraphy.png',
+  'assets/brushes/brush_air03.png', 'assets/brushes/brush_chalk_charcoal.png', 'assets/brushes/brush_water_real_mask.png',
+  'assets/brushes/paper_texture_05_mask.png', 'assets/brushes/paper_texture_10_mask.png',
 ];
 
 self.addEventListener('install', (e) => {
