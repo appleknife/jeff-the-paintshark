@@ -1,7 +1,7 @@
 import {
   $, $$, el, clamp, uid, makeCanvas, ctx2d, download, canvasToBlob, hsvToRgb, releaseCanvas,
 } from './util.js';
-import { BLEND_MODES, tintedTip, tipCanvas } from './brush.js';
+import { BLEND_MODES, tintedTip, tipCanvas, applyGrain } from './brush.js';
 import { ADJUSTMENTS, applyAdjustment, defaultParams } from './adjust.js';
 import { LIQUIFY_MODES } from './transform.js';
 import { state, toast, sheet, field, gestures, closeSheet } from './appstate.js';
@@ -521,6 +521,11 @@ export function brushPreview(p) {
     g.rotate((p.shapeAngle || 0) * Math.PI);
     g.drawImage(tip, -size / 2, -size / 2, size, size);
     g.restore();
+  }
+  if (p.mode !== 'erase') {
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+    applyGrain(g, p, W, H);
   }
   return c;
 }
