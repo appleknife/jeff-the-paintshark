@@ -99,15 +99,30 @@ export class Viewport {
     const after = this.toDoc(sx, sy);
     this.panX += (after.x - before.x) * this.zoom;
     this.panY += (after.y - before.y) * this.zoom;
-    this.request();
+    this.request('view');
   }
 
-  request() {
+  /**
+   * Schedule a redraw. 'view' means only pan/zoom changed, so the last composite of the
+   * artwork can be reused; 'overlay' means only the cursor/guides changed. Anything else
+   * re-composites the layers.
+   */
+  request(kind = 'full') {
+    if (kind === 'full') this._needFull = true;
+    else if (kind === 'view') this._needView = true;
     if (this._raf) return;
-    this._raf = requestAnimationFrame(() => { this._raf = null; this.draw(); });
+    this._raf = requestAnimationFrame(() => {
+      this._raf = null;
+      const full = this._needFull, view = this._needView;
+      this._needFull = this._needView = false;
+      if (full || view) this.draw(!full);
+      else this.drawOverlay();
+    });
   }
 
-  draw() {
+  requestOverlay() { this.request('overlay'); }
+
+  draw(reuse = false) {
     const g = this.ctx;
     g.clearRect(0, 0, this.w, this.h);
     g.fillStyle = '#0d1320';
@@ -115,13 +130,14 @@ export class Viewport {
     if (!this.doc) return;
     const d = this.doc;
     const w = d.width * this.zoom, h = d.height * this.zoom;
-    // Soft drop shadow so the canvas sits on the table like a sheet of paper.
+    // Soft drop shadow so the canvas sits on the table like a sheet of paper. Drawn as a few
+    // translucent rings: Canvas shadowBlur over a canvas-sized rect is slow on iPad.
     g.save();
-    g.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    g.shadowBlur = 36;
-    g.shadowOffsetY = 12;
-    g.fillStyle = '#0d1320';
-    g.fillRect(this.panX, this.panY, w, h);
+    for (let i = 8; i >= 1; i--) {
+      g.fillStyle = `rgba(0, 0, 0, ${0.05})`;
+      const r = i * 4;
+      g.fillRect(this.panX - r * 0.6, this.panY - r * 0.3 + 10, w + r * 1.2, h + r * 1.2);
+    }
     g.restore();
 
     g.save();
@@ -136,7 +152,12 @@ export class Viewport {
       g.globalAlpha = 1;
     }
     // The document reuses one composite buffer (saves a full-size canvas on iPad).
-    const comp = d.renderView(this.activeStroke && this.activeStroke.enabled ? this.activeStroke : null);
+    const stroking = this.activeStroke && this.activeStroke.enabled ? this.activeStroke : null;
+    // Pan/zoom only: the artwork itself hasn't changed, so reuse the last composite.
+    const canReuse = reuse && !stroking && !d.liveTransform && this._compVersion === d.version && this._compDoc === d;
+    const comp = canReuse ? d._comp : d.renderView(stroking);
+    this._compVersion = stroking || d.liveTransform ? -1 : d.version;
+    this._compDoc = d;
     g.imageSmoothingQuality = 'high';
     g.drawImage(comp, 0, 0);
     if (this.showAnts && d.selection && d.selection.active) {
@@ -154,9 +175,13 @@ export class Viewport {
     d.zoom = this.zoom;
 
 
-    // Overlay: clear once, then guides, selection-in-progress and brush cursor.
-    // (The cursor used to clear the overlay right after the guides were drawn, so guides never showed.)
+    this.drawOverlay();
+  }
+
+  /** Guides, selection-in-progress and brush cursor, on the overlay canvas only. */
+  drawOverlay() {
     this.octx.clearRect(0, 0, this.w, this.h);
+    if (!this.doc) return;
     this._drawGuides();
     this._drawSelPreview();
     this._drawHud();

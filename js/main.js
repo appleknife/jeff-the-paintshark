@@ -355,10 +355,18 @@ async function blobImage(bytes) {
 // Saves run one at a time, in order, so two autosaves never interleave their writes.
 let saveChain = Promise.resolve();
 
-function saveDoc(show, doc = state.doc) {
+let saveCount = 0;
+
+/**
+ * Save the open artwork. Only layers that changed since the last save are re-encoded
+ * (re-encoding every layer after every stroke froze the iPad for a moment); every 10th save,
+ * and always when leaving the canvas, everything is re-encoded as a safety net.
+ */
+function saveDoc(show, doc = state.doc, full = false) {
   if (!doc) return Promise.resolve();
   const run = saveChain.then(async () => {
-    const blob = await doc.serialize();
+    const everything = full || (++saveCount % 10 === 0);
+    const blob = await doc.serialize(everything);
     const tc = compositeThumb(doc, 320);
     const thumb = await canvasToBlob(tc, 'image/jpeg', 0.72);
     releaseCanvas(tc);
@@ -378,7 +386,12 @@ function saveDoc(show, doc = state.doc) {
 function maybeAutosave() {
   clearTimeout(state.autosaveTimer);
   const doc = state.doc;
-  state.autosaveTimer = setTimeout(() => saveDoc(false, doc).catch(() => {}), 900);
+  const attempt = () => {
+    // Never save in the middle of a stroke or gesture; wait until the pencil is lifted.
+    if (state.stroke || state.pointers.size || state.transform) { state.autosaveTimer = setTimeout(attempt, 700); return; }
+    saveDoc(false, doc).catch(() => {});
+  };
+  state.autosaveTimer = setTimeout(attempt, 1200);
 }
 
 async function closeCurrentDoc() {
@@ -387,7 +400,7 @@ async function closeCurrentDoc() {
   if (state.stroke) { state.stroke.end(); state.stroke = null; }
   if (state.transform) state.commitTransform?.();
   clearTimeout(state.autosaveTimer);
-  await saveDoc(false, doc).catch(() => {});
+  await saveDoc(false, doc, true).catch(() => {});
   state.timelapse?.stop();
   state.toggleFullscreen?.(false);
   if (!$('#refPane').classList.contains('hidden')) state.toggleReference?.();
