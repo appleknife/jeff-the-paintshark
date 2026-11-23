@@ -136,18 +136,19 @@ export function tipCanvas(preset) {
   } else {
     const fat = clamp(preset.shapeRoundness, 0.08, 1);
     const hard = clamp(preset.hardness ?? 0.55, 0.01, 0.94);
-    g.save();
-    g.translate(size / 2, size / 2);
-    g.scale(fat, 1);
-    // The gradient is created after the transform, centred on (0, 0). (It used to be built at
-    // (size/2, size/2) before translating, which put its centre in the bottom-right corner, so
-    // every soft brush painted down and to the right of the pen.)
-    const grad = g.createRadialGradient(0, 0, 0, 0, 0, size * 0.48);
+    // The original soft tip, kept exactly as it was: the gradient is built before the transform,
+    // so its bright centre lands off to one side and each dab is a lopsided crescent with one
+    // firm edge. Overlapping crescents are what give these brushes their streaky texture.
+    // (Where it lands on the canvas is corrected in Stroke._stamp, using the tip's centroid.)
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.5);
     grad.addColorStop(0, 'rgba(255,255,255,1)');
     grad.addColorStop(hard, 'rgba(255,255,255,0.95)');
     grad.addColorStop(hard + (1 - hard) * 0.6, 'rgba(255,255,255,0.55)');
     grad.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = grad;
+    g.save();
+    g.translate(size / 2, size / 2);
+    g.scale(fat, 1);
     g.beginPath();
     g.arc(0, 0, size * 0.48, 0, Math.PI * 2);
     g.fill();
@@ -208,9 +209,22 @@ export function tipCanvas(preset) {
     g.clearRect(0, 0, size, size);
     g.drawImage(tmp, 0, 0);
   }
+  measureCentroid(c);
   if (tipCache.size > 40) tipCache.delete(tipCache.keys().next().value);
   tipCache.set(key, c);
   return c;
+}
+
+/** Where the paint in a tip actually sits, as an offset from the tip's centre (in tip pixels). */
+function measureCentroid(c) {
+  const d = ctx2d(c).getImageData(0, 0, c.width, c.height).data;
+  let sx = 0, sy = 0, s = 0;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+    const a = d[(y * c.width + x) * 4 + 3];
+    sx += a * x; sy += a * y; s += a;
+  }
+  c.cx = s ? sx / s - (c.width - 1) / 2 : 0;
+  c.cy = s ? sy / s - (c.height - 1) / 2 : 0;
 }
 
 export function clearTipCache() { tipCache.clear(); tintCache.clear(); }
@@ -228,6 +242,7 @@ export function tintedTip(preset, color) {
   g.globalCompositeOperation = 'source-in';
   g.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${color[3] ?? 1})`;
   g.fillRect(0, 0, c.width, c.height);
+  c.cx = base.cx; c.cy = base.cy;
   if (tintCache.size > 30) tintCache.delete(tintCache.keys().next().value);
   tintCache.set(key, c);
   return c;
@@ -313,7 +328,9 @@ export class Stroke {
         this.sg.translate(sx + dx, sy + dy);
         this.sg.rotate(rot);
         this.sg.scale(1, this.baseAspect);
-        this.sg.drawImage(this.tip, -size / 2, -size / 2, size, size);
+        // Shift the dab so the painted part of the tip (not its bounding box) sits on the pen.
+        const k = size / this.tip.width;
+        this.sg.drawImage(this.tip, -size / 2 - (this.tip.cx || 0) * k, -size / 2 - (this.tip.cy || 0) * k, size, size);
         this.sg.restore();
       }
     };
@@ -418,9 +435,7 @@ export class Stroke {
     const to = this.smooth;
     const dx = to.x - from.x, dy = to.y - from.y;
     const dist = Math.hypot(dx, dy);
-    // Space stamps by the size actually being drawn (a tapered tip is small, so stamps sit closer).
-    const drawn = this._lastSize ?? this.brush.size * this.doc.width;
-    const spacing = Math.max(0.35, this.brush.spacing * Math.max(1, drawn));
+    const spacing = Math.max(0.35, this.brush.spacing * Math.max(1, this.brush.size * this.doc.width));
     const speed = dist / Math.max(1, to.t - from.t);
     let travelled = 0;
     let stamped = false;

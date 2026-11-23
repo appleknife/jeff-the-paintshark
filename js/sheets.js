@@ -519,7 +519,8 @@ export function brushPreview(p) {
     g.save();
     g.translate(pt.x, pt.y);
     g.rotate((p.shapeAngle || 0) * Math.PI);
-    g.drawImage(tip, -size / 2, -size / 2, size, size);
+    const tk = size / tip.width;
+    g.drawImage(tip, -size / 2 - (tip.cx || 0) * tk, -size / 2 - (tip.cy || 0) * tk, size, size);
     g.restore();
   }
   return c;
