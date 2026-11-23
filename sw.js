@@ -1,4 +1,4 @@
-const CACHE = 'paintshark-v10';
+const CACHE = 'paintshark-v9';
 const ASSETS = [
   '.', 'index.html', 'css/app.css',
   'js/main.js', 'js/appstate.js', 'js/util.js', 'js/brush.js', 'js/doc.js', 'js/zip.js',

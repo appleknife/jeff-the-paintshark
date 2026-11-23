@@ -1,5 +1,5 @@
 import { makeCanvas, ctx2d, uid, clamp, releaseCanvas, CANVAS_BUDGET, isAppleMobile } from './util.js';
-import { NATIVE_BLENDS, applyGrain } from './brush.js';
+import { NATIVE_BLENDS } from './brush.js';
 
 let layerSeq = 1;
 
@@ -455,15 +455,12 @@ export class Doc {
   /** Show the stroke the way commit() will apply it: selection, alpha lock and erase included. */
   _previewStroke(tg, stroke, layer) {
     let buf = stroke.strokeCanvas, tmp = null;
-    if (stroke.selection || stroke.grain) {
+    if (stroke.selection) {
       tmp = this._acquire();
       const sg = ctx2d(tmp);
       sg.drawImage(buf, 0, 0);
-      if (stroke.grain) applyGrain(sg, stroke.grain, this.width, this.height);
-      if (stroke.selection) {
-        sg.globalCompositeOperation = 'destination-in';
-        sg.drawImage(stroke.selection.maskCanvas(), 0, 0);
-      }
+      sg.globalCompositeOperation = 'destination-in';
+      sg.drawImage(stroke.selection.maskCanvas(), 0, 0);
       sg.globalCompositeOperation = 'source-over';
       buf = tmp;
     }
