@@ -33,5 +33,6 @@ Animation Assist timeline. Blend modes outside the native Canvas2D set run on th
 
 Research notes: see the `re/` folder in the parent project.
 
-Procreate is © Savage Interactive. Seeded brush tips and paper grains sampled from
-ibis Paint X 14.1.6 (© ibis inc). This is an independent reimplementation.
+Procreate is © Savage Interactive. Seeded presets are tuned from ibis Paint X
+14.1.6 values; their tips and paper grains are generated look-alikes from
+`tools/make-brushes.py`. This is an independent reimplementation.

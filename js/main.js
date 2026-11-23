@@ -17,7 +17,7 @@ import { ask } from './appstate.js';
 function seedPresets() {
   const mk = (name, o) => defaultPreset({ name, seed: true, ...o });
   return [
-    mk('Shark Pencil', { size: 0.028, spacing: 0.045, shape: 'speckle', grain: 'none', texture: 'assets/brushes/brush_pencil_graphite.png', grainTexture: 'assets/brushes/paper_texture_05_mask.png', grainDepth: 0.45, opacity: 0.95, taperStart: 0.12, taperEnd: 0.12, streamline: 0.35, dynamics: { ...defaultPreset().dynamics, pressureSize: 1, pressureOpacity: 0.85 } }),
+    mk('Shark Pencil', { size: 0.028, spacing: 0.045, spacingJitter: 0.25, shape: 'speckle', grain: 'none', texture: 'assets/brushes/brush_pencil_graphite.png', grainTexture: 'assets/brushes/paper_texture_05_mask.png', grainDepth: 0.62, opacity: 1, jitter: 0.18, angleJitter: 0.08, taperStart: 0.12, taperEnd: 0.12, streamline: 0.35, dynamics: { ...defaultPreset().dynamics, pressureSize: 1, pressureOpacity: 0.85 } }),
     mk('Ink Fineliner', { size: 0.013, spacing: 0.018, shape: 'hard', hardness: 0.85, grain: 'none', texture: 'assets/brushes/brush_pen01.png', streamline: 0.5, taperStart: 0.14, taperEnd: 0.1, opacity: 1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.5, pressureOpacity: 0.12 } }),
     mk('Chunky Marker', { size: 0.085, spacing: 0.03, shape: 'hard', hardness: 0.8, grain: 'none', texture: 'assets/brushes/brush_flat_calligraphy.png', opacity: 0.95, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.2, pressureOpacity: 0.15 } }),
     mk('Soft Airbrush', { size: 0.2, spacing: 0.03, shape: 'soft', shapeRoundness: 0.95, grain: 'none', texture: 'assets/brushes/brush_air03.png', opacity: 0.32, flow: 0.25, wetMix: 0.1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.25, pressureOpacity: 0.5 } }),
