@@ -387,7 +387,8 @@ export function setupInput() {
   // Predicted pencil positions (Safari and Chrome provide these), drawn as a temporary line.
   function predictAhead(e) {
     const s = state.stroke;
-    const preds = e.getPredictedEvents ? e.getPredictedEvents() : [];
+    // Only for the Apple Pencil: mouse/finger predictions jitter and look like a flailing line.
+    const preds = e.pointerType === 'pen' && e.getPredictedEvents ? e.getPredictedEvents() : [];
     if (!s || s.mode !== 'paint' || !preds.length || !s.last) { state.view.prediction = null; return; }
     const pts = [];
     for (const ev of preds) {
