@@ -15,7 +15,7 @@ import * as sfx from './sfx.js';
 import { ask } from './appstate.js';
 
 function seedPresets() {
-  const mk = (name, o) => defaultPreset({ name, ...o });
+  const mk = (name, o) => defaultPreset({ name, seed: true, ...o });
   return [
     mk('Shark Pencil', { size: 0.028, spacing: 0.045, shape: 'speckle', grain: 'none', texture: 'assets/brushes/brush_pencil_graphite.png', grainTexture: 'assets/brushes/paper_texture_05_mask.png', grainDepth: 0.45, opacity: 0.95, taperStart: 0.12, taperEnd: 0.12, streamline: 0.35, dynamics: { ...defaultPreset().dynamics, pressureSize: 1, pressureOpacity: 0.85 } }),
     mk('Ink Fineliner', { size: 0.013, spacing: 0.018, shape: 'hard', hardness: 0.85, grain: 'none', texture: 'assets/brushes/brush_pen01.png', streamline: 0.5, taperStart: 0.14, taperEnd: 0.1, opacity: 1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.5, pressureOpacity: 0.12 } }),
@@ -38,8 +38,10 @@ async function boot() {
   state.secondary = state.prefs.secondary || state.secondary;
   const seeds = seedPresets();
   const seedNames = new Set(seeds.map((s) => s.name));
-  const stored = store.loadPresets(seeds);
-  state.presets = [...seeds, ...stored.filter((p) => !seedNames.has(p.name))];
+  const stored = store.loadPresets(seeds, defaultPreset());
+  // Seeds are always rebuilt fresh. Drop stored copies of them (old copies carry no flag, so match
+  // by name), but keep brushes the person saved themselves, even under a seed's name.
+  state.presets = [...seeds, ...stored.filter((p) => !p.seed && (p.custom || !seedNames.has(p.name)))];
   state.brush = state.presets[0];
   preloadPresetTextures(state.presets).then(() => {
     clearTipCache();
