@@ -99,7 +99,7 @@ export function setupInput() {
     if (state.panning) {
       state.view.panX = state.panning.px + (e.clientX - state.panning.x);
       state.view.panY = state.panning.py + (e.clientY - state.panning.y);
-      state.view.request();
+      state.view.request('view');
       return;
     }
     if (state.pointers.size >= 2) {
@@ -110,7 +110,7 @@ export function setupInput() {
         state.view.panY += tf.cy - state.pinch.cy;
         if (state.pinch.d > 8 && tf.d > 8) state.view.zoomAt(tf.cx, tf.cy, tf.d / state.pinch.d);
         state.pinch = tf;
-        state.view.request();
+        state.view.request('view');
       }
       return;
     }
@@ -134,7 +134,7 @@ export function setupInput() {
     if (state.tool === 'select' && state.selDrawing && e.buttons) {
       state.selectPoints.push(pt);
       state.view.selPreview = { mode: state.sel.mode, points: state.selectPoints };
-      state.view.request();
+      state.view.requestOverlay();
       return;
     }
     if (state.tool === 'liquify' && state.liquifyDrawing && e.buttons) {
@@ -384,13 +384,13 @@ export function setupInput() {
     const size = Math.max(2, state.brush.size * state.doc.width);
     state.view.hud = { x: dx, y: dy };
     state.view.hudSize = size;
-    state.view.request();
+    state.view.requestOverlay(); // just the cursor ring, not the whole artwork
   }
 
   stage.addEventListener('pointerleave', (e) => {
     if (e.pointerType === 'touch') return;
     state.view.hud = null;
-    state.view.request();
+    state.view.requestOverlay();
   });
 }
 

@@ -72,6 +72,10 @@ export class Doc {
     this._poolCount = 0;
     this._strokeBuf = null;
     this.liveTransform = null;
+    this.version = 0;          // bumps on every change event (used to reuse renders)
+    this._split = null;        // cached layers below/above while painting
+    this._blobs = new Map();   // canvas -> { rev, all, blob } for incremental saves
+    this._allRev = 0;
     this.undoStack = [];
     this.redoStack = [];
     this.undoLimit = 40;
@@ -90,7 +94,15 @@ export class Doc {
   emit(evt, data) {
     this._dirty = true;
     this.dirtyMeta = true;
+    this.version++;
+    // Track which layer images changed, so autosave only re-encodes those.
+    if (evt === 'strokeEnd' && data?.layer) this.markDirty(data.layer);
+    else if (evt === 'layers') this._allRev++;
     for (const fn of this._listeners.get(evt) || []) fn(data);
+  }
+
+  markDirty(layer) {
+    if (layer?.canvas) layer.canvas._rev = (layer.canvas._rev || 0) + 1;
   }
 
   get active() {
@@ -352,10 +364,66 @@ export class Doc {
     return this._comp;
   }
 
-  /** Composite including the in-progress stroke / transform, for the viewport. */
+  /**
+   * Composite including the in-progress stroke / transform, for the viewport.
+   * While painting, everything below the layer being painted (and, when it's safe, above it)
+   * is rendered once into a cache, so each frame only redraws that one layer. Without this,
+   * every pencil movement re-composited every layer at full resolution.
+   */
   renderView(activeStroke) {
+    const live = activeStroke ? activeStroke.layer : this.liveTransform?.layer;
+    if (live && this._renderSplit(live, activeStroke || this.liveTransform, activeStroke)) return this._comp;
+    this._dropSplit();
     this.render(this._comp, activeStroke);
     return this._comp;
+  }
+
+  _dropSplit() {
+    if (!this._split) return;
+    this._release(this._split.below);
+    this._release(this._split.above);
+    this._split = null;
+  }
+
+  _renderSplit(layer, owner, stroke) {
+    let top = layer;
+    while (top.group) top = top.group;
+    const idx = this.layers.indexOf(top);
+    if (idx < 0 || top.clipping) return false;
+    let sp = this._split;
+    if (!sp || sp.owner !== owner || sp.version !== this.version || sp.top !== top) {
+      this._dropSplit();
+      if (!this._free.length && !this.canAllocate(2)) return false;
+      const rest = this.layers.slice(idx + 1);
+      // Layers above can be pre-merged only if they all blend normally and none clips to `top`.
+      const aboveOk = rest.length > 0 && !rest[0].clipping && rest.every((l) => l.blend === 'normal');
+      const below = this._acquire();
+      const bg = ctx2d(below);
+      if (this.bgAlpha > 0) {
+        bg.globalAlpha = this.bgAlpha;
+        bg.fillStyle = this.bgColor;
+        bg.fillRect(0, 0, this.width, this.height);
+        bg.globalAlpha = 1;
+      }
+      this._renderList(bg, this.layers.slice(0, idx), null);
+      let above = null;
+      if (aboveOk) {
+        above = this._acquire();
+        this._renderList(ctx2d(above), rest, null);
+      }
+      sp = this._split = { owner, version: this.version, top, below, above, live: aboveOk ? [top] : [top, ...rest] };
+    }
+    const g = ctx2d(this._comp);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'copy';
+    g.drawImage(sp.below, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    this._renderList(g, sp.live, stroke);
+    if (sp.above) g.drawImage(sp.above, 0, 0);
+    g.restore();
+    return true;
   }
 
   strokeBuffer() {
@@ -547,6 +615,8 @@ export class Doc {
 
   /** Free every canvas this document owns (call when closing it). */
   dispose() {
+    this._dropSplit();
+    this._blobs.clear();
     for (const l of this.layerFlatList()) { releaseCanvas(l.canvas); releaseCanvas(l.mask); }
     for (const c of this._free) releaseCanvas(c);
     releaseCanvas(this._comp);
@@ -558,7 +628,17 @@ export class Doc {
 
   bgCss() { return this.bgAlpha > 0 ? hexA(this.bgColor, this.bgAlpha) : 'transparent'; }
 
-  async serialize() {
+  /** PNG for a canvas, reusing the last encoding if the canvas hasn't changed since. */
+  async _png(c, full) {
+    const hit = this._blobs.get(c);
+    if (!full && hit && hit.rev === (c._rev || 0) && hit.all === this._allRev) return hit.blob;
+    const rev = c._rev || 0, all = this._allRev;
+    const blob = await canvasBlob(c);
+    this._blobs.set(c, { rev, all, blob });
+    return blob;
+  }
+
+  async serialize(full = false) {
     const entries = [];
     const meta = {
       app: 'paintshark', version: 1, id: this.id, name: this.name,
@@ -576,12 +656,16 @@ export class Doc {
           blend: l.blend, alphaLock: l.alphaLock, clipping: l.clipping, textData: l.textData,
           hasChildren: !!l.children,
         })]) });
-        if (!l.children) entries.push({ name: `${base}.png`, data: await canvasBlob(l.canvas) });
-        if (l.mask) entries.push({ name: `${base}.mask.png`, data: await canvasBlob(l.mask) });
+        if (!l.children) entries.push({ name: `${base}.png`, data: await this._png(l.canvas, full) });
+        if (l.mask) entries.push({ name: `${base}.mask.png`, data: await this._png(l.mask, full) });
         if (l.children) await walk(l.children, `${base}/`);
       }
     };
     await walk(this.layers, 'layers/');
+    // Forget encodings of layers that no longer exist.
+    const live = new Set();
+    for (const l of this.layerFlatList()) { live.add(l.canvas); if (l.mask) live.add(l.mask); }
+    for (const c of [...this._blobs.keys()]) if (!live.has(c)) this._blobs.delete(c);
     return writeZipSafe(entries);
   }
 }
