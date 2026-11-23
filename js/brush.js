@@ -103,8 +103,7 @@ const rngFrom = (seed) => {
 
 const tipCache = new Map();
 
-const tipKey = (p) => [p.shape, p.shapeRoundness, p.hardness ?? 0.55, p.grain, p.grainDepth, p.grainScale,
-  p.grainInverted, p.shapeInverted, p.textureDepth].join('|');
+const tipKey = (p) => [p.shape, p.shapeRoundness, p.hardness ?? 0.55, p.shapeInverted].join('|');
 
 export function tipCanvas(preset) {
   const key = tipKey(preset);
@@ -154,49 +153,7 @@ export function tipCanvas(preset) {
     g.restore();
   }
 
-  if (preset.grain && preset.grainDepth > 0) {
-    const gc = makeCanvas(size, size);
-    const gg = ctx2d(gc);
-    const scale = Math.max(1, Math.round(size * clamp(preset.grainScale, 0.05, 1) * 0.12));
-    if (preset.grain === 'canvas') {
-      gg.strokeStyle = '#000';
-      gg.globalAlpha = 0.55;
-      for (let y = 0; y < size; y += scale) {
-        gg.beginPath(); gg.moveTo(0, y); gg.lineTo(size, y); gg.stroke();
-        gg.beginPath(); gg.moveTo(y, 0); gg.lineTo(y, size); gg.stroke();
-      }
-    } else if (preset.grain === 'spray') {
-      for (let i = 0; i < 3000; i++) {
-        gg.fillStyle = '#000';
-        gg.globalAlpha = rnd() * 0.9;
-        gg.fillRect(rnd() * size, rnd() * size, scale * 0.5, scale * 0.5);
-      }
-    } else if (preset.grain === 'noise') {
-      const img = gg.createImageData(size, size);
-      for (let i = 0; i < img.data.length; i += 4) {
-        const v = rnd() < 0.45 ? 0 : 255;
-        img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-        img.data[i + 3] = 255;
-      }
-      gg.putImageData(img, 0, 0);
-    } else {
-      gg.fillStyle = '#fff';
-      gg.fillRect(0, 0, size, size);
-      for (let i = 0; i < 1400; i++) {
-        gg.strokeStyle = 'rgba(0,0,0,.5)';
-        gg.globalAlpha = 0.06 + rnd() * 0.3;
-        gg.lineWidth = scale * (0.4 + rnd());
-        const x = rnd() * size, y = rnd() * size, l = 2 + rnd() * scale * 4;
-        gg.beginPath(); gg.moveTo(x, y); gg.lineTo(x + l, y + (rnd() - 0.5) * l); gg.stroke();
-      }
-    }
-    gg.globalAlpha = 1;
-    g.save();
-    g.globalCompositeOperation = 'source-atop';
-    g.globalAlpha = clamp(preset.grainDepth, 0, 1);
-    g.drawImage(gc, 0, 0);
-    g.restore();
-  }
+  // Grain is applied per stroke in canvas space (see grainPattern), not baked into the tip.
 
   if (preset.shapeInverted || preset.grainInverted) {
     const tmp = makeCanvas(size, size);
@@ -214,6 +171,96 @@ export function tipCanvas(preset) {
 }
 
 export function clearTipCache() { tipCache.clear(); tintCache.clear(); }
+
+/* ---------- paper grain ----------
+ * A seamless tile whose alpha says how much paint the paper's texture knocks out.
+ * It's fixed to the canvas (like real paper tooth), so overlapping strokes keep the
+ * same texture instead of smearing it. */
+
+const grainCache = new Map();
+
+function wrapBlur(src, n, rx, ry) {
+  const tmp = new Float32Array(src.length), out = new Float32Array(src.length);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    let a = 0;
+    for (let k = -rx; k <= rx; k++) a += src[y * n + ((x + k + n) % n)];
+    tmp[y * n + x] = a / (2 * rx + 1);
+  }
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    let a = 0;
+    for (let k = -ry; k <= ry; k++) a += tmp[((y + k + n) % n) * n + x];
+    out[y * n + x] = a / (2 * ry + 1);
+  }
+  return out;
+}
+
+/** The grain tile for a preset (cached), or null for no grain. */
+export function grainTile(p) {
+  const kind = p.grain;
+  if (!kind || kind === 'none' || !(p.grainDepth > 0)) return null;
+  const scale = 0.5 + clamp(p.grainScale ?? 0.35, 0.05, 1) * 1.5;
+  const key = `${kind}|${scale.toFixed(2)}|${p.grainInverted ? 1 : 0}`;
+  if (grainCache.has(key)) return grainCache.get(key);
+  const n = 128;
+  const rnd = rngFrom([...key].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 11));
+  const noise = () => { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rnd(); return a; };
+  let v;
+  if (kind === 'paper') {
+    // Fine tooth plus long soft fibres running mostly sideways.
+    const fine = wrapBlur(noise(), n, 1, 1), fibre = wrapBlur(noise(), n, 6, 1);
+    v = fine.map((f, i) => f * 0.65 + fibre[i] * 0.35);
+  } else if (kind === 'canvas') {
+    // Woven threads (lines, not dots) roughened with fine tooth.
+    const fine = wrapBlur(noise(), n, 1, 1), wob = wrapBlur(noise(), n, 3, 3), p8 = (Math.PI * 2) / 8;
+    v = fine.map((f, i) => {
+      const x = i % n, y = (i / n) | 0;
+      const warp = 0.5 + 0.5 * Math.sin(x * p8 + wob[i] * 2), weft = 0.5 + 0.5 * Math.sin(y * p8 + wob[i] * 2);
+      return Math.max(warp, weft) * 0.22 + f * 0.78;
+    });
+  } else if (kind === 'spray') {
+    v = noise().map((r) => (r > 0.86 ? 0 : 1));
+  } else {
+    v = wrapBlur(noise(), n, 0, 0);
+  }
+  // Normalise and push the contrast so the tooth reads clearly.
+  let lo = Infinity, hi = -Infinity;
+  for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const c = makeCanvas(n, n), g = ctx2d(c), img = g.createImageData(n, n);
+  for (let i = 0; i < v.length; i++) {
+    let t = (v[i] - lo) / Math.max(1e-6, hi - lo);
+    t = clamp((t - 0.42) * (kind === 'canvas' ? 1.7 : 2.6) + 0.5);
+    if (p.grainInverted) t = 1 - t;
+    img.data[i * 4 + 3] = Math.round(t * 255);
+  }
+  g.putImageData(img, 0, 0);
+  let tile = c;
+  if (Math.abs(scale - 1) > 0.01) {
+    const s = Math.max(8, Math.round(n * scale));
+    tile = makeCanvas(s, s);
+    const tg = ctx2d(tile);
+    tg.imageSmoothingQuality = 'high';
+    tg.drawImage(c, 0, 0, s, s);
+  }
+  if (grainCache.size > 12) grainCache.delete(grainCache.keys().next().value);
+  grainCache.set(key, tile);
+  return tile;
+}
+
+/** How strongly the grain knocks paint out (0–0.95). */
+export const grainStrength = (p) => clamp((p.grainDepth || 0) * (p.grain === 'canvas' ? 1.3 : 2.1), 0, 0.82);
+
+/** Knock the paper grain out of everything drawn on `g` (whole canvas). */
+export function applyGrain(g, p, w, h) {
+  const tile = grainTile(p);
+  if (!tile) return;
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalCompositeOperation = 'destination-out';
+  g.globalAlpha = grainStrength(p);
+  g.fillStyle = g.createPattern(tile, 'repeat');
+  g.fillRect(0, 0, w, h);
+  g.restore();
+}
 
 const tintCache = new Map();
 
@@ -256,6 +303,8 @@ export class Stroke {
     this.strokeCanvas = this.doc.strokeBuffer();
     this.sg = ctx2d(this.strokeCanvas);
     this.bbox = null;
+    // Paper grain (not for smudging, which moves existing paint around).
+    this.grain = this.mode !== 'smudge' && grainTile(this.brush) ? this.brush : null;
     // The tip is already squashed by shapeRoundness; don't squash it a second time here.
     this.baseAspect = 1;
   }
@@ -480,6 +529,7 @@ export class Stroke {
     lctx.save();
     if (this.layer.alphaLock) lctx.globalCompositeOperation = 'source-atop';
     if (this.mode === 'erase') lctx.globalCompositeOperation = 'destination-out';
+    if (this.grain) applyGrain(this.sg, this.grain, this.doc.width, this.doc.height);
     if (this.selection) {
       const tg = this.sg;
       tg.save();
