@@ -174,7 +174,7 @@ export function syncBrushSliders() {
   $('#sizeVal').textContent = String(size);
   $('#opacitySlider').value = Math.round(state.brush.opacity * 100);
   $('#opacityVal').textContent = `${Math.round(state.brush.opacity * 100)}%`;
-  const soft = state.brush.shape === 'hard' ? 100 : Math.round(clamp(state.brush.hardness ?? 0.55, 0.01, 0.94) * 100);
+  const soft = state.brush.shape === 'hard' ? 0 : Math.round((1 - clamp(state.brush.hardness ?? 0.55, 0.01, 0.94)) * 100);
   $('#softSlider').value = soft;
   $('#softVal').textContent = `${soft}%`;
 }

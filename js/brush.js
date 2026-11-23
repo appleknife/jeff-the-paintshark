@@ -106,18 +106,6 @@ const rngFrom = (seed) => {
 const tipCache = new Map();
 const texCache = new Map();
 
-// True when a tip image is solid right up to its border; stamped as is, it leaves square dabs.
-function edgeOpaque(img) {
-  try {
-    const n = 32, c = makeCanvas(n, n), g = ctx2d(c);
-    g.drawImage(img, 0, 0, n, n);
-    const d = g.getImageData(0, 0, n, n).data;
-    let sum = 0, cnt = 0;
-    for (let i = 0; i < n; i++) for (const [x, y] of [[i, 0], [i, n - 1], [0, i], [n - 1, i]]) { sum += d[(y * n + x) * 4 + 3]; cnt++; }
-    return sum / cnt > 40;
-  } catch { return false; }
-}
-
 export function preloadPresetTextures(presets) {
   const urls = new Set();
   for (const p of presets) {
@@ -127,7 +115,7 @@ export function preloadPresetTextures(presets) {
   return Promise.all([...urls].map((u) => new Promise((resolve) => {
     if (texCache.has(u)) return resolve();
     const img = new Image();
-    img.onload = () => { img.edgeOpaque = edgeOpaque(img); texCache.set(u, img); resolve(); };
+    img.onload = () => { texCache.set(u, img); resolve(); };
     img.onerror = resolve;
     img.src = u;
   }))).then(() => { clearTipCache(); });
@@ -190,18 +178,20 @@ export function tipCanvas(preset) {
     g.clearRect(0, 0, size, size);
     const s = size * 0.94;
     g.drawImage(tipTex, (size - s) / 2, (size - s) / 2, s, s);
-    if (tipTex.edgeOpaque) {
-      // Round off a tip that fills its whole square, so dabs don't stamp hard square corners.
-      const fade = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, s / 2);
-      fade.addColorStop(0, 'rgba(0,0,0,1)');
-      fade.addColorStop(0.6, 'rgba(0,0,0,1)');
-      fade.addColorStop(1, 'rgba(0,0,0,0)');
-      g.save();
-      g.globalCompositeOperation = 'destination-in';
-      g.fillStyle = fade;
-      g.fillRect(0, 0, size, size);
-      g.restore();
-    }
+    // Softness (inverse hardness) fades the tip edge. Without this the sampled texture
+    // overrides the procedural shape, so the Softness slider did nothing.
+    const hard = clamp(preset.hardness ?? 0.55, 0.01, 0.94);
+    const outer = size * 0.5;
+    const inner = outer * (0.08 + 0.86 * hard);
+    const fade = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, outer);
+    fade.addColorStop(0, 'rgba(0,0,0,1)');
+    fade.addColorStop(clamp(inner / outer, 0.02, 0.98), 'rgba(0,0,0,1)');
+    fade.addColorStop(1, 'rgba(0,0,0,0)');
+    g.save();
+    g.globalCompositeOperation = 'destination-in';
+    g.fillStyle = fade;
+    g.fillRect(0, 0, size, size);
+    g.restore();
   }
 
   if (preset.grainTexture && texCache.has(preset.grainTexture) && preset.grainDepth > 0) {

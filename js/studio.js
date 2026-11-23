@@ -79,11 +79,11 @@ export function setupStudio() {
     $('#opacityVal').textContent = `${e.target.value}%`;
   };
   $('#softSlider').oninput = (e) => {
-    // Edge hardness only. (This used to change shapeRoundness, which squashed the tip into an oval.)
+    // Softness: 0 is a crisp edge, 100 is a fully feathered one. Stored as inverse hardness.
     const v = +e.target.value;
-    if (v > 94 && state.brush.shape === 'soft') state.brush.shape = 'hard';
-    else if (v <= 94 && state.brush.shape === 'hard') state.brush.shape = 'soft';
-    state.brush.hardness = clamp(v / 100, 0.01, 0.94);
+    if (v < 6 && state.brush.shape === 'soft') state.brush.shape = 'hard';
+    else if (v >= 6 && state.brush.shape === 'hard') state.brush.shape = 'soft';
+    state.brush.hardness = clamp(1 - v / 100, 0.01, 0.94);
     $('#softVal').textContent = `${v}%`;
     clearTipCache();
   };
