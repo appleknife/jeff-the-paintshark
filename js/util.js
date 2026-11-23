@@ -181,8 +181,14 @@ export function drawBlurred(dst, src, radius) {
   releaseCanvas(t);
 }
 
+/**
+ * 2D context for a canvas. Canvases stay GPU-accelerated: `willReadFrequently: true` (which
+ * this used to set on every canvas) forces software rendering, and since Safari 18 that put all
+ * of the painting on the iPad's CPU. Reading pixels back occasionally (undo, fill, eyedropper)
+ * is still fine on an accelerated canvas.
+ */
 export function ctx2d(canvas, opts = {}) {
-  return canvas.getContext('2d', { alpha: true, willReadFrequently: true, ...opts });
+  return canvas.getContext('2d', { alpha: true, ...opts });
 }
 
 export function loadImage(src) {

@@ -5,7 +5,8 @@ export class Viewport {
     this.stage = stage;
     this.canvas = viewCanvas;
     this.overlay = overlay;
-    this.ctx = ctx2d(viewCanvas);
+    // desynchronized: lets browsers that support it show strokes with less delay.
+    this.ctx = ctx2d(viewCanvas, { alpha: false, desynchronized: true });
     this.octx = ctx2d(overlay);
     this.doc = null;
     this.zoom = 1;
@@ -184,7 +185,31 @@ export class Viewport {
     if (!this.doc) return;
     this._drawGuides();
     this._drawSelPreview();
+    this._drawPrediction();
     this._drawHud();
+  }
+
+  /**
+   * "Draw ahead": a short, temporary line from the end of the stroke to where the system
+   * predicts the pencil is going. It is replaced by the real stroke on the next frame, so the
+   * ink appears to keep up with the pencil tip.
+   */
+  _drawPrediction() {
+    const p = this.prediction;
+    if (!p || !p.points.length) return;
+    const o = this.octx;
+    o.save();
+    o.globalAlpha = p.alpha;
+    o.strokeStyle = p.color;
+    o.lineWidth = p.width;
+    o.lineCap = 'round';
+    o.lineJoin = 'round';
+    o.beginPath();
+    const a = this.toScreen(p.from.x, p.from.y);
+    o.moveTo(a.x, a.y);
+    for (const q of p.points) { const s = this.toScreen(q.x, q.y); o.lineTo(s.x, s.y); }
+    o.stroke();
+    o.restore();
   }
 
   _drawSelPreview() {
