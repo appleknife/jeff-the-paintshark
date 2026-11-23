@@ -1,4 +1,4 @@
-import { $, clamp } from './util.js';
+import { $, clamp, ctx2d } from './util.js';
 import { Stroke, sampleCompositeColor } from './brush.js';
 import { state, gestures, toast } from './appstate.js';
 import { quickMenu } from './sheets.js';
@@ -75,6 +75,7 @@ export function setupInput() {
       state.stroke = null;
       strokePointer = null;
       state.view.activeStroke = null;
+      state.view.prediction = null;
     }
     state.selDrawing = false;
     state.liquifyDrawing = false;
@@ -127,6 +128,7 @@ export function setupInput() {
         const p = toDoc(ev);
         state.stroke.move({ x: p.x, y: p.y, pressure: pressureOf(ev), tilt: tiltOf(ev), azimuth: azimuthOf(ev) });
       }
+      predictAhead(e);
       updateHud(pt.x, pt.y);
       state.view.request();
       return;
@@ -164,6 +166,7 @@ export function setupInput() {
         state.stroke = null;
         strokePointer = null;
         state.view.activeStroke = null;
+        state.view.prediction = null;
       } else if (state.tool === 'select' && state.selDrawing) finishSelection();
       else if (state.tool === 'liquify' && state.liquifyDrawing) {
         state.liquifyDrawing = false;
@@ -207,6 +210,7 @@ export function setupInput() {
       state.stroke = null;
       strokePointer = null;
       state.view.activeStroke = null;
+      state.view.prediction = null;
     }
     if (state.pointers.size === 0) {
       gesture = null;
@@ -380,6 +384,25 @@ export function setupInput() {
     doc.emit('strokeEnd', { layer });
   }
 
+  // Predicted pencil positions (Safari and Chrome provide these), drawn as a temporary line.
+  function predictAhead(e) {
+    const s = state.stroke;
+    const preds = e.getPredictedEvents ? e.getPredictedEvents() : [];
+    if (!s || s.mode !== 'paint' || !preds.length || !s.last) { state.view.prediction = null; return; }
+    const pts = [];
+    for (const ev of preds) {
+      if (!Number.isFinite(ev.clientX) || Math.abs(ev.clientX - e.clientX) > 120 || Math.abs(ev.clientY - e.clientY) > 120) continue;
+      pts.push(toDoc(ev));
+    }
+    if (!pts.length) { state.view.prediction = null; return; }
+    const b = state.brush;
+    const size = Math.max(1, b.size * state.doc.width * (0.4 + 0.6 * pressureOf(e))) * 0.7;
+    state.view.prediction = {
+      from: { x: s.last.x, y: s.last.y }, points: pts,
+      color: state.primary, alpha: Math.min(0.85, b.opacity * state.alpha), width: Math.max(1, size * state.view.zoom),
+    };
+  }
+
   function updateHud(dx, dy) {
     const size = Math.max(2, state.brush.size * state.doc.width);
     state.view.hud = { x: dx, y: dy };
@@ -394,7 +417,7 @@ export function setupInput() {
   });
 }
 
-const ctx = (c) => c.getContext('2d', { willReadFrequently: true });
+const ctx = (c) => ctx2d(c);
 
 function hexToRgbLocal(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
