@@ -51,6 +51,8 @@ export function defaultPreset(overrides = {}) {
     grainInverted: false,
     grainMode: 'multiply',
     textureDepth: 0.1,
+    texture: null,
+    grainTexture: null,
     spacing: 0.09,
     spacingJitter: 0.1,
     size: 0.09,
@@ -102,9 +104,25 @@ const rngFrom = (seed) => {
 };
 
 const tipCache = new Map();
+const texCache = new Map();
+
+export function preloadPresetTextures(presets) {
+  const urls = new Set();
+  for (const p of presets) {
+    if (p.texture) urls.add(p.texture);
+    if (p.grainTexture) urls.add(p.grainTexture);
+  }
+  return Promise.all([...urls].map((u) => new Promise((resolve) => {
+    if (texCache.has(u)) return resolve();
+    const img = new Image();
+    img.onload = () => { texCache.set(u, img); resolve(); };
+    img.onerror = resolve;
+    img.src = u;
+  }))).then(() => { clearTipCache(); });
+}
 
 const tipKey = (p) => [p.shape, p.shapeRoundness, p.hardness ?? 0.55, p.grain, p.grainDepth, p.grainScale,
-  p.grainInverted, p.shapeInverted, p.textureDepth].join('|');
+  p.grainInverted, p.shapeInverted, p.textureDepth, p.texture, p.grainTexture].join('|');
 
 export function tipCanvas(preset) {
   const key = tipKey(preset);
@@ -155,7 +173,20 @@ export function tipCanvas(preset) {
     g.restore();
   }
 
-  if (preset.grain && preset.grainDepth > 0) {
+  const tipTex = preset.texture && texCache.get(preset.texture);
+  if (tipTex) {
+    g.clearRect(0, 0, size, size);
+    const s = size * 0.94;
+    g.drawImage(tipTex, (size - s) / 2, (size - s) / 2, s, s);
+  }
+
+  if (preset.grainTexture && texCache.has(preset.grainTexture) && preset.grainDepth > 0) {
+    g.save();
+    g.globalCompositeOperation = 'destination-out';
+    g.globalAlpha = clamp(preset.grainDepth, 0, 1);
+    g.drawImage(texCache.get(preset.grainTexture), 0, 0, size, size);
+    g.restore();
+  } else if (preset.grain && preset.grainDepth > 0) {
     const gc = makeCanvas(size, size);
     const gg = ctx2d(gc);
     const scale = Math.max(1, Math.round(size * clamp(preset.grainScale, 0.05, 1) * 0.12));

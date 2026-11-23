@@ -1,6 +1,6 @@
 import { $, el, makeCanvas, ctx2d, loadImage, uid, canvasToBlob, isIPad, fitArea, releaseCanvas, installRangeFill } from './util.js';
 import { Doc, compositeThumb } from './doc.js';
-import { defaultPreset } from './brush.js';
+import { defaultPreset, preloadPresetTextures, clearTipCache } from './brush.js';
 import { Selection } from './selection.js';
 import { Viewport } from './view.js';
 import { Timelapse } from './timelapse.js';
@@ -17,12 +17,12 @@ import { ask } from './appstate.js';
 function seedPresets() {
   const mk = (name, o) => defaultPreset({ name, ...o });
   return [
-    mk('Shark Pencil', { size: 0.035, spacing: 0.06, grain: 'paper', grainDepth: 0.25, shapeRoundness: 0.75, taperStart: 0.2, taperEnd: 0.18, dynamics: { ...defaultPreset().dynamics, pressureSize: 1, pressureOpacity: 0.55 } }),
-    mk('Ink Fineliner', { size: 0.018, spacing: 0.03, shape: 'hard', grain: 'none', streamline: 0.55, taperStart: 0.1, taperEnd: 0.1, opacity: 1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.8, pressureOpacity: 0.1 } }),
-    mk('Chunky Marker', { size: 0.12, spacing: 0.05, shape: 'hard', shapeRoundness: 0.55, grain: 'paper', grainDepth: 0.12, opacity: 0.9, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.25, pressureOpacity: 0.2 } }),
-    mk('Soft Airbrush', { size: 0.22, spacing: 0.04, shape: 'soft', shapeRoundness: 0.95, grain: 'noise', grainDepth: 0.08, opacity: 0.35, flow: 0.3, wetMix: 0.15, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.3, pressureOpacity: 0.5 } }),
-    mk('Charcoal', { size: 0.09, spacing: 0.09, shape: 'speckle', grain: 'canvas', grainDepth: 0.6, opacity: 0.85, jitter: 0.5, angleJitter: 0.4, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.7, pressureOpacity: 0.7 } }),
-    mk('Wet Gouache', { size: 0.1, spacing: 0.06, shape: 'soft', grain: 'paper', grainDepth: 0.2, wetMix: 0.55, wetEdges: 0.5, glaze: 0.4, opacity: 0.95, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.4, pressureOpacity: 0.35 } }),
+    mk('Shark Pencil', { size: 0.028, spacing: 0.045, shape: 'speckle', grain: 'none', texture: 'assets/brushes/brush_pencil_graphite.png', grainTexture: 'assets/brushes/paper_texture_05_mask.png', grainDepth: 0.45, opacity: 0.95, taperStart: 0.12, taperEnd: 0.12, streamline: 0.35, dynamics: { ...defaultPreset().dynamics, pressureSize: 1, pressureOpacity: 0.85 } }),
+    mk('Ink Fineliner', { size: 0.013, spacing: 0.018, shape: 'hard', hardness: 0.85, grain: 'none', texture: 'assets/brushes/brush_pen01.png', streamline: 0.5, taperStart: 0.14, taperEnd: 0.1, opacity: 1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.5, pressureOpacity: 0.12 } }),
+    mk('Chunky Marker', { size: 0.085, spacing: 0.03, shape: 'hard', hardness: 0.8, grain: 'none', texture: 'assets/brushes/brush_flat_calligraphy.png', opacity: 0.95, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.2, pressureOpacity: 0.15 } }),
+    mk('Soft Airbrush', { size: 0.2, spacing: 0.03, shape: 'soft', shapeRoundness: 0.95, grain: 'none', texture: 'assets/brushes/brush_air03.png', opacity: 0.32, flow: 0.25, wetMix: 0.1, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.25, pressureOpacity: 0.5 } }),
+    mk('Charcoal', { size: 0.07, spacing: 0.055, shape: 'speckle', grain: 'none', texture: 'assets/brushes/brush_chalk_charcoal.png', grainTexture: 'assets/brushes/paper_texture_05_mask.png', grainDepth: 0.6, opacity: 0.85, jitter: 0.4, angleJitter: 0.35, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.85, pressureOpacity: 0.75 } }),
+    mk('Wet Gouache', { size: 0.085, spacing: 0.045, shape: 'soft', grain: 'none', texture: 'assets/brushes/brush_water_real_mask.png', grainTexture: 'assets/brushes/paper_texture_10_mask.png', grainDepth: 0.3, wetMix: 0.6, wetEdges: 0.5, glaze: 0.45, opacity: 0.95, dynamics: { ...defaultPreset().dynamics, pressureSize: 0.35, pressureOpacity: 0.5 } }),
     mk('Reef Smudge', { size: 0.12, spacing: 0.03, shape: 'soft', grain: 'none', smudgePull: 0.85, opacity: 1, mode: 'smudge' }),
     mk('Fin Eraser', { size: 0.08, spacing: 0.05, shape: 'soft', grain: 'none', mode: 'erase', opacity: 1 }),
   ];
@@ -36,8 +36,15 @@ async function boot() {
   state.palettes = store.loadPalettes();
   state.primary = state.prefs.primary || state.primary;
   state.secondary = state.prefs.secondary || state.secondary;
-  state.presets = store.loadPresets(seedPresets());
+  const seeds = seedPresets();
+  const seedNames = new Set(seeds.map((s) => s.name));
+  const stored = store.loadPresets(seeds);
+  state.presets = [...seeds, ...stored.filter((p) => !seedNames.has(p.name))];
   state.brush = state.presets[0];
+  preloadPresetTextures(state.presets).then(() => {
+    clearTipCache();
+    if (state.presets.includes(state.brush)) selectBrush(state.brush);
+  });
   // Gesture choices made in Settings were saved but never read back.
   if (state.prefs.gestures) {
     for (const k of Object.keys(gestures)) if (state.prefs.gestures[k]) gestures[k] = state.prefs.gestures[k];

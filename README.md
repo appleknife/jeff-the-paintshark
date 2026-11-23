@@ -18,7 +18,7 @@ Open <http://127.0.0.1:8137/>. Plain ES modules, no build step.
 ## Features
 
 - Pencil pressure, tilt, azimuth; finger fallback; long-press eyedropper
-- Stamp brush engine: shape, grain, scatter, spacing, taper, flow, wet mix, glaze, smudge
+- Stamp brush engine: sampled ibis-style tips and paper grain, scatter, spacing, taper, flow, wet mix, glaze, smudge
 - Layers, groups, 25 blend modes, alpha lock, clipping and layer masks
 - Rect/ellipse/freehand/auto selections with feather, boolean ops, fill
 - Free transform + 8×8 warp mesh, liquify modes, 14 adjustments
@@ -33,4 +33,5 @@ Animation Assist timeline. Blend modes outside the native Canvas2D set run on th
 
 Research notes: see the `re/` folder in the parent project.
 
-Procreate is © Savage Interactive. This is an independent reimplementation.
+Procreate is © Savage Interactive. Seeded brush tips and paper grains sampled from
+ibis Paint X 14.1.6 (© ibis inc). This is an independent reimplementation.
